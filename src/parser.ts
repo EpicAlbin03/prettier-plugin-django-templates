@@ -1,5 +1,5 @@
 import type { Parser } from 'prettier';
-import { getTagRole, isBranchTag, isEndTag, isRawTag } from './helpers/tags';
+import { getTagRole, isBranchTag, isEndTag, isInlineStandaloneTag, isRawTag } from './tags';
 import type {
   BlockNode,
   CommentNode,
@@ -55,17 +55,6 @@ interface RawBlockToken extends TokenBase {
 }
 
 type Token = TextToken | VariableToken | CommentToken | IgnoreBlockToken | TagToken | RawBlockToken;
-
-const INLINE_STANDALONE_TAGS = new Set([
-  'url',
-  'now',
-  'cycle',
-  'firstof',
-  'querystring',
-  'partial',
-  'static',
-  'translate',
-]);
 
 const IGNORE_BLOCK_STARTS = ['<!-- prettier-ignore-start -->', '{# prettier-ignore-start #}'];
 const IGNORE_BLOCK_ENDS = ['<!-- prettier-ignore-end -->', '{# prettier-ignore-end #}'];
@@ -357,7 +346,7 @@ function actsAsEndTag(token: TagToken, stack: StatementNode[]): boolean {
 }
 
 function shouldInlineStandalone(tag: TagToken): boolean {
-  return INLINE_STANDALONE_TAGS.has(tag.name) || tag.inAttribute || tag.inTag;
+  return isInlineStandaloneTag(tag.name) || tag.inAttribute || tag.inTag;
 }
 
 function hasMatchingEnd(tokens: Token[], startIndex: number, startName: string): boolean {
@@ -367,10 +356,7 @@ function hasMatchingEnd(tokens: Token[], startIndex: number, startName: string):
     .some((token) => token.type === 'Tag' && endNames.has(token.name));
 }
 
-function placeholderKindForToken(
-  token: Token,
-  forceBlock = false,
-): PlaceholderKind {
+function placeholderKindForToken(token: Token, forceBlock = false): PlaceholderKind {
   if (token.inTag && !token.inAttribute) {
     return 'attr';
   }
@@ -546,7 +532,9 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
       }
 
       if (matchIndex === NOT_FOUND) {
-        throw new Error(`No opening statement found for closing statement "${endNode.originalText}".`);
+        throw new Error(
+          `No opening statement found for closing statement "${endNode.originalText}".`,
+        );
       }
 
       const startNode = stack.splice(matchIndex, 1)[0];
@@ -578,7 +566,9 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
     }
 
     if (token.role === 'end') {
-      throw new Error(`No opening statement found for closing statement "${statementBase.originalText}".`);
+      throw new Error(
+        `No opening statement found for closing statement "${statementBase.originalText}".`,
+      );
     }
 
     if (token.role === 'standalone' && !isBranchTag(token.name) && !isEndTag(token.name)) {
