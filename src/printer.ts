@@ -100,11 +100,71 @@ function printStatement(node: StatementNode): Doc {
   return statement;
 }
 
+function isBlockStandaloneStatement(
+  node: BlockNode | { content: string; nodes: Record<string, DjangoNode> },
+  segment: string | undefined,
+): boolean {
+  if (!segment) {
+    return false;
+  }
+
+  const currentNode = node.nodes[segment];
+  return (
+    currentNode?.type === 'statement' &&
+    currentNode.role === 'standalone' &&
+    currentNode.placeholderKind === 'block'
+  );
+}
+
+function segmentHasRenderableText(
+  node: BlockNode | { content: string; nodes: Record<string, DjangoNode> },
+  segment: string | undefined,
+): boolean {
+  if (!segment) {
+    return false;
+  }
+
+  let content = segment;
+  for (const id of getPlaceholderIds(node)) {
+    content = content.split(id).join('');
+  }
+
+  return /\S/.test(content);
+}
+
+function joinSegments(
+  node: BlockNode | { content: string; nodes: Record<string, DjangoNode> },
+  segments: string[],
+  mapped: Doc[],
+): Doc {
+  const docs: Doc[] = [];
+
+  for (const [index, segment] of segments.entries()) {
+    if (
+      isBlockStandaloneStatement(node, segment) &&
+      segmentHasRenderableText(node, segments[index - 1])
+    ) {
+      docs.push(builders.hardline);
+    }
+
+    docs.push(mapped[index]);
+
+    if (
+      isBlockStandaloneStatement(node, segment) &&
+      segmentHasRenderableText(node, segments[index + 1])
+    ) {
+      docs.push(builders.hardline);
+    }
+  }
+
+  return docs;
+}
+
 function buildBlock(
   path: AstPath<DjangoNode>,
   print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
   block: BlockNode,
-  mapped: Doc[],
+  mapped: Doc,
 ): Doc {
   if (/^\s*$/.test(block.content)) {
     return builders.group([
@@ -203,15 +263,17 @@ export const embed: Printer<DjangoNode>['embed'] = () => {
       }),
     );
 
+    const joined = joinSegments(node, segments, mapped);
+
     if (node.type === 'block') {
-      const block = buildBlock(path, print, node, mapped as Doc[]);
+      const block = buildBlock(path, print, node, joined);
       if (node.preNewLines > 1) {
         return builders.group([builders.trim, builders.hardline, block]);
       }
       return block;
     }
 
-    return [...mapped, builders.hardline];
+    return [joined, builders.hardline];
   };
 };
 
