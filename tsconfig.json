@@ -1,9 +1,9 @@
 {
-    "compilerOptions": {
-        "target": "es6",
-        "module": "commonjs",
-        "strict": true,
-        "esModuleInterop": true
-    },
-    "include": ["src/**/*", "index.d.ts"]
+  "compilerOptions": {
+    "target": "es6",
+    "module": "commonjs",
+    "strict": true,
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*", "index.d.ts"]
 }

@@ -12,15 +12,15 @@ npm i -D prettier prettier-plugin-django
 
 ```json
 {
-    "plugins": ["prettier-plugin-django"],
-    "overrides": [
-        {
-            "files": "*.html",
-            "options": {
-                "parser": "django-html"
-            }
-        }
-    ]
+  "plugins": ["prettier-plugin-django"],
+  "overrides": [
+    {
+      "files": "*.html",
+      "options": {
+        "parser": "django-html"
+      }
+    }
+  ]
 }
 ```
 

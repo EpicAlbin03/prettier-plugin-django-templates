@@ -1,68 +1,68 @@
 {
-    "name": "prettier-plugin-django",
-    "version": "0.1.0",
-    "description": "Django template plugin for Prettier",
-    "main": "plugin.js",
-    "files": [
-        "plugin.js",
-        "plugin.js.map",
-        "browser.js",
-        "index.d.ts"
-    ],
-    "types": "./index.d.ts",
-    "exports": {
-        ".": {
-            "types": "./index.d.ts",
-            "default": "./plugin.js"
-        },
-        "./browser": "./browser.js",
-        "./package.json": "./package.json"
+  "name": "prettier-plugin-django",
+  "version": "0.1.0",
+  "description": "Django template plugin for Prettier",
+  "main": "plugin.js",
+  "files": [
+    "plugin.js",
+    "plugin.js.map",
+    "browser.js",
+    "index.d.ts"
+  ],
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./plugin.js"
     },
-    "scripts": {
-        "build": "rollup -c",
-        "check": "tsc --noEmit",
-        "check:watch": "tsc --noEmit --watch",
-        "lint": "prettier --check .",
-        "format": "prettier --write .",
-        "test": "ava",
-        "prepare": "pnpm build",
-        "prepublishOnly": "pnpm test",
-        "changeset:version": "changeset version && git add --all",
-        "changeset:publish": "changeset publish"
-    },
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/EpicAlbin03/prettier-plugin-django.git"
-    },
-    "keywords": [
-        "prettier",
-        "django"
-    ],
-    "license": "MIT",
-    "bugs": {
-        "url": "https://github.com/EpicAlbin03/prettier-plugin-django/issues"
-    },
-    "engines": {
-        "node": ">=20"
-    },
-    "homepage": "https://github.com/EpicAlbin03/prettier-plugin-django#readme",
-    "devDependencies": {
-        "@changesets/cli": "^2.29.8",
-        "@svitejs/changesets-changelog-github-compact": "^1.1.0",
-        "@rollup/plugin-alias": "^5.1.0",
-        "@rollup/plugin-commonjs": "14.0.0",
-        "@rollup/plugin-node-resolve": "11.0.1",
-        "@types/node": "^20",
-        "ava": "3.15.0",
-        "prettier": "^3.8.0",
-        "rollup": "2.36.0",
-        "rollup-plugin-typescript": "1.0.1",
-        "ts-node": "^10.1.1",
-        "tslib": "^2.6.0",
-        "typescript": "5.1.3"
-    },
-    "packageManager": "pnpm@10.33.4+sha512.1c67b3b359b2d408119ba1ed289f34b8fc3c6873412bec6fd264fbdc82489e510fcbecb9ce9d22dae7f3b76269d8441046014bdca53b9979cd7a561ad631b800",
-    "peerDependencies": {
-        "prettier": "^3.0.0"
-    }
+    "./browser": "./browser.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "rollup -c",
+    "check": "tsc --noEmit",
+    "check:watch": "tsc --noEmit --watch",
+    "lint": "prettier --check .",
+    "format": "prettier --write .",
+    "test": "ava",
+    "prepare": "pnpm build",
+    "prepublishOnly": "pnpm test",
+    "changeset:version": "changeset version && git add --all",
+    "changeset:publish": "changeset publish"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EpicAlbin03/prettier-plugin-django.git"
+  },
+  "keywords": [
+    "prettier",
+    "django"
+  ],
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/EpicAlbin03/prettier-plugin-django/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "homepage": "https://github.com/EpicAlbin03/prettier-plugin-django#readme",
+  "devDependencies": {
+    "@changesets/cli": "^2.29.8",
+    "@svitejs/changesets-changelog-github-compact": "^1.1.0",
+    "@rollup/plugin-alias": "^5.1.0",
+    "@rollup/plugin-commonjs": "14.0.0",
+    "@rollup/plugin-node-resolve": "11.0.1",
+    "@types/node": "^20",
+    "ava": "3.15.0",
+    "prettier": "^3.8.0",
+    "rollup": "2.36.0",
+    "rollup-plugin-typescript": "1.0.1",
+    "ts-node": "^10.1.1",
+    "tslib": "^2.6.0",
+    "typescript": "5.1.3"
+  },
+  "packageManager": "pnpm@10.33.4+sha512.1c67b3b359b2d408119ba1ed289f34b8fc3c6873412bec6fd264fbdc82489e510fcbecb9ce9d22dae7f3b76269d8441046014bdca53b9979cd7a561ad631b800",
+  "peerDependencies": {
+    "prettier": "^3.0.0"
+  }
 }
