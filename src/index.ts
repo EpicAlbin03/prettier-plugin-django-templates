@@ -1,152 +1,184 @@
-import { SupportLanguage, Parser, Printer } from 'prettier';
-import * as prettierPluginBabel from 'prettier/plugins/babel';
-import { hasPragma, print } from './print';
-import { ASTNode } from './print/nodes';
-import { embed, getVisitorKeys } from './embed';
-import { snipScriptAndStyleTagContent } from './lib/snipTagContent';
-import { parse } from 'svelte/compiler';
-import { ParserOptions } from './options';
+import type { Parser, Printer, SupportLanguage } from 'prettier';
+import * as prettierPluginHtml from 'prettier/plugins/html';
 
-const babelParser = prettierPluginBabel.parsers.babel;
-const typescriptParser = prettierPluginBabel.parsers['babel-ts']; // TODO use TypeScript parser in next major?
+type PlaceholderMap = Record<string, string>;
+type DjangoOptions = { __djangoPlaceholders?: PlaceholderMap };
 
-function locStart(node: any) {
-    return node.start;
+type Token =
+    | { type: 'text'; raw: string; content: string }
+    | { type: 'block'; raw: string; content: string }
+    | { type: 'var'; raw: string; content: string }
+    | { type: 'comment'; raw: string; content: string };
+
+const htmlParser = prettierPluginHtml.parsers.html;
+const htmlPrinter = prettierPluginHtml.printers.html;
+const DJANGO_TAG_RE = /({%[\s\S]*?%}|{{[\s\S]*?}}|{#[\s\S]*?#})/g;
+const PLACEHOLDER_PREFIX = '___PRETTIER_DJANGO_';
+const PLACEHOLDER_SUFFIX = '___';
+
+function placeholderName(id: number) {
+    return `${PLACEHOLDER_PREFIX}${id}${PLACEHOLDER_SUFFIX}`;
 }
 
-function locEnd(node: any) {
-    return node.end;
+class PlaceholderStore {
+    nextId = 0;
+    values: PlaceholderMap = {};
+
+    add(raw: string) {
+        const key = placeholderName(this.nextId++);
+        this.values[key] = raw;
+        return key;
+    }
+}
+
+function normalizeTag(raw: string, type: Token['type'], content: string) {
+    const inner = content.trim();
+
+    switch (type) {
+        case 'var':
+            return `{{ ${inner} }}`;
+        case 'comment':
+            return `{# ${inner} #}`;
+        case 'block':
+            return `{% ${inner} %}`;
+        default:
+            return raw;
+    }
+}
+
+function tokenize(text: string): Token[] {
+    const tokens: Token[] = [];
+    let inTag = false;
+    let verbatimEndTag: string | null = null;
+
+    for (const chunk of text.split(DJANGO_TAG_RE)) {
+        if (!chunk) {
+            continue;
+        }
+
+        if (inTag) {
+            const start = chunk.slice(0, 2);
+
+            if (start === '{%') {
+                const content = chunk.slice(2, -2).trim();
+
+                if (verbatimEndTag) {
+                    if (content === verbatimEndTag) {
+                        verbatimEndTag = null;
+                        tokens.push({ type: 'block', raw: chunk, content });
+                    } else {
+                        tokens.push({ type: 'text', raw: chunk, content: chunk });
+                    }
+                } else {
+                    if (content === 'verbatim' || content.startsWith('verbatim ')) {
+                        verbatimEndTag = `end${content}`;
+                    }
+
+                    tokens.push({ type: 'block', raw: chunk, content });
+                }
+            } else if (verbatimEndTag) {
+                tokens.push({ type: 'text', raw: chunk, content: chunk });
+            } else if (start === '{{') {
+                tokens.push({ type: 'var', raw: chunk, content: chunk.slice(2, -2).trim() });
+            } else {
+                tokens.push({
+                    type: 'comment',
+                    raw: chunk,
+                    content: chunk.slice(2, -2).trim(),
+                });
+            }
+        } else {
+            tokens.push({ type: 'text', raw: chunk, content: chunk });
+        }
+
+        inTag = !inTag;
+    }
+
+    return tokens;
+}
+
+function transformTemplate(text: string) {
+    const placeholders = new PlaceholderStore();
+    const transformed = tokenize(text)
+        .map((token) => {
+            if (token.type === 'text') {
+                return token.content;
+            }
+
+            return placeholders.add(normalizeTag(token.raw, token.type, token.content));
+        })
+        .join('');
+
+    return { transformed, placeholders: placeholders.values };
+}
+
+function replaceString(input: string, values: PlaceholderMap) {
+    let output = input;
+
+    for (const [key, value] of Object.entries(values)) {
+        output = output.split(key).join(value);
+    }
+
+    return output;
+}
+
+function replacePlaceholdersInDoc(options: DjangoOptions, value: any): any {
+    const placeholders = options.__djangoPlaceholders;
+
+    if (!placeholders || Object.keys(placeholders).length === 0) {
+        return value;
+    }
+
+    if (typeof value === 'string') {
+        return replaceString(value, placeholders);
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((entry) => replacePlaceholdersInDoc(options, entry));
+    }
+
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+
+    const copy: Record<string, any> = {};
+    for (const [key, child] of Object.entries(value)) {
+        copy[key] = replacePlaceholdersInDoc(options, child);
+    }
+    return copy;
 }
 
 export const languages: Partial<SupportLanguage>[] = [
     {
-        name: 'svelte',
-        parsers: ['svelte'],
-        extensions: ['.svelte'],
-        vscodeLanguageIds: ['svelte'],
+        name: 'HTML+Django',
+        parsers: ['django-html'],
+        extensions: ['.html'],
+        vscodeLanguageIds: ['html'],
     },
 ];
 
 export const parsers: Record<string, Parser> = {
-    svelte: {
-        hasPragma,
-        parse: async (text, options: ParserOptions) => {
-            try {
-                let _parse = parse;
-                if (options.svelte5CompilerPath) {
-                    try {
-                        _parse = (await import(options.svelte5CompilerPath)).parse;
-                    } catch (e) {
-                        console.warn(
-                            `Failed to load Svelte 5 compiler from ${options.svelte5CompilerPath}`,
-                        );
-                        console.warn(e);
-                        options.svelte5CompilerPath = undefined;
-                    }
-                }
-
-                const root = _parse(text, { modern: true }) as Record<string, any>;
-                (root as ASTNode).__isRoot = true;
-
-                // Prettier does a sanity check on ast.comments after printing
-                // to verify all comments were printed. Since the comments array
-                // includes script/style comments already handled by embedded
-                // parsers, we stash the full array on _comments and remove
-                // comments so Prettier doesn't try to process them itself.
-                // We then manually attach attribute comments in embed().
-                (root as ASTNode)._comments = root.comments;
-                delete root.comments;
-
-                return root;
-            } catch (err: any) {
-                if (err.start != null && err.end != null) {
-                    // Prettier expects error objects to have loc.start and loc.end fields.
-                    // Svelte uses start and end directly on the error.
-                    err.loc = {
-                        start: err.start,
-                        end: err.end,
-                    };
-                }
-
-                throw err;
-            }
+    'django-html': {
+        ...htmlParser,
+        parse: (text, options) => {
+            const { transformed, placeholders } = transformTemplate(text);
+            (options as DjangoOptions).__djangoPlaceholders = placeholders;
+            return htmlParser.parse(transformed, options);
         },
-        preprocess: (text, options: ParserOptions) => {
-            const result = snipScriptAndStyleTagContent(text);
-            text = result.text.trim();
-            // Prettier sets the preprocessed text as the originalText in case
-            // the Svelte formatter is called directly. In case it's called
-            // as an embedded parser (for example when there's a Svelte code block
-            // inside markdown), the originalText is not updated after preprocessing.
-            // Therefore we do it ourselves here.
-            options.originalText = text;
-            options._svelte_ts = result.isTypescript;
-            return text;
-        },
-        locStart,
-        locEnd,
-        astFormat: 'svelte-ast',
-    },
-    svelteExpressionParser: {
-        ...babelParser,
-        parse: (text: string, options: any) => {
-            const ast = babelParser.parse(text, options);
-
-            let program = ast.program.body[0];
-            if (!options._svelte_asFunction) {
-                program = program.expression;
-            }
-
-            return { ...ast, program };
-        },
-    },
-    svelteStatementParser: {
-        ...babelParser,
-        parse: (text: string, options: any) => {
-            const ast = babelParser.parse(text, options);
-
-            return { ...ast, program: ast.program.body[0] };
-        },
-    },
-    svelteTSExpressionParser: {
-        ...typescriptParser,
-        parse: (text: string, options: any) => {
-            const ast = typescriptParser.parse(text, options);
-
-            let program = ast.program.body[0];
-            if (!options._svelte_asFunction) {
-                program = program.expression;
-            }
-
-            return { ...ast, program };
-        },
-    },
-    svelteTSStatementParser: {
-        ...typescriptParser,
-        parse: (text: string, options: any) => {
-            const ast = typescriptParser.parse(text, options);
-
-            return { ...ast, program: ast.program.body[0] };
-        },
+        astFormat: htmlParser.astFormat,
+        locStart: htmlParser.locStart,
+        locEnd: htmlParser.locEnd,
     },
 };
 
 export const printers: Record<string, Printer> = {
-    'svelte-ast': {
-        print,
-        embed,
-        getVisitorKeys,
-        isBlockComment(comment: any) {
-            return comment.type === 'Block';
-        },
-        printComment(commentPath: any) {
-            const comment = commentPath.getValue();
-            if (comment.type === 'Line') {
-                return '//' + comment.value.replace(/\r$/, '');
-            }
-            return '/*' + comment.value + '*/';
+    html: {
+        ...htmlPrinter,
+        print(path, options, print) {
+            const result = htmlPrinter.print(path, options, print);
+            return replacePlaceholdersInDoc(options as DjangoOptions, result);
         },
     },
 };
 
-export { options } from './options';
+export const options = {};
