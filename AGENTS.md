@@ -11,3 +11,5 @@ Available repositories:
 
 - `django`
 - `prettier-plugin-svelte`
+- `prettier-plugin-jinja-template`
+  $$
