@@ -1,0 +1,3 @@
+import { runSpec } from '../../tests_config/run-spec'
+
+runSpec(import.meta.url, ['django'])
