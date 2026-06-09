@@ -1,4 +1,4 @@
-# prettier-plugin-django changelog
+# prettier-plugin-django-templates changelog
 
 ## 0.1.0
 

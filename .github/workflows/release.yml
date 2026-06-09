@@ -11,7 +11,7 @@ concurrency:
 permissions: {}
 jobs:
   release:
-    if: github.repository == 'EpicAlbin03/prettier-plugin-django'
+    if: github.repository == 'EpicAlbin03/prettier-plugin-django-templates'
     permissions:
       contents: write
       id-token: write

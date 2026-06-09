@@ -1,11 +1,11 @@
-# Prettier Plugin Django
+# Prettier Plugin Django Templates
 
 Format Django templates with Prettier.
 
 ## Install
 
 ```bash
-npm i -D prettier prettier-plugin-django
+npm i -D prettier prettier-plugin-django-templates
 ```
 
 ## Usage
@@ -14,7 +14,7 @@ Add the plugin to your Prettier config:
 
 ```json
 {
-  "plugins": ["prettier-plugin-django"]
+  "plugins": ["prettier-plugin-django-templates"]
 }
 ```
 
@@ -22,7 +22,7 @@ The plugin provides the `django-html` parser for Django templates in `.html` fil
 
 ```json
 {
-  "plugins": ["prettier-plugin-django"],
+  "plugins": ["prettier-plugin-django-templates"],
   "overrides": [
     {
       "files": "*.html",
@@ -40,15 +40,15 @@ Using range ignores is the best way to tell prettier to ignore part of files. Mo
 
 ```html
 <!-- prettier-ignore-start -->
-  <script>
-    window.someData = {{ data|safe }}
-  </script>
+<script>
+  window.someData = {{ data|safe }}
+</script>
 <!-- prettier-ignore-end -->
 
 <!-- prettier-ignore-start -->
-  <style>
-    :root { --accent-color: {{ theme_accent_color }} }
-  </style>
+<style>
+  :root { --accent-color: {{ theme_accent_color }} }
+</style>
 <!-- prettier-ignore-end -->
 ```
 
@@ -56,16 +56,16 @@ Or using Django comments:
 
 ```html
 {# prettier-ignore-start #}
-  <script>
-    window.someData = {{ data|safe }}
-  </script>
+<script>
+  window.someData = {{ data|safe }}
+</script>
 {# prettier-ignore-end #} {# prettier-ignore-start #}
-  <style>
-    :root { --accent-color: {{ theme_accent_color }} }
-  </style>
+<style>
+  :root { --accent-color: {{ theme_accent_color }} }
+</style>
 {# prettier-ignore-end #}
 ```
 
 ## Usage in the browser
 
-Usage in the browser is semi-supported. You can import the plugin from `prettier-plugin-django/browser` to get a version that depends on `prettier/standalone` and therefore doesn't use any node APIs. What isn't supported in a good way yet is using this without a build step - you still need a bundler like Vite to build everything together as one self-contained package in advance.
+Usage in the browser is semi-supported. You can import the plugin from `prettier-plugin-django-templates/browser` to get a version that depends on `prettier/standalone` and therefore doesn't use any node APIs. What isn't supported in a good way yet is using this without a build step - you still need a bundler like Vite to build everything together as one self-contained package in advance.

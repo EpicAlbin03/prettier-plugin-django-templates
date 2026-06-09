@@ -1,5 +1,5 @@
 {
-  "name": "prettier-plugin-django",
+  "name": "prettier-plugin-django-templates",
   "version": "0.1.0",
   "description": "Django template plugin for Prettier",
   "main": "plugin.js",
@@ -32,7 +32,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/EpicAlbin03/prettier-plugin-django.git"
+    "url": "git+https://github.com/EpicAlbin03/prettier-plugin-django-templates.git"
   },
   "keywords": [
     "prettier",
@@ -40,12 +40,12 @@
   ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/EpicAlbin03/prettier-plugin-django/issues"
+    "url": "https://github.com/EpicAlbin03/prettier-plugin-django-templates/issues"
   },
   "engines": {
     "node": ">=22"
   },
-  "homepage": "https://github.com/EpicAlbin03/prettier-plugin-django#readme",
+  "homepage": "https://github.com/EpicAlbin03/prettier-plugin-django-templates#readme",
   "devDependencies": {
     "@changesets/changelog-github": "^0.5.1",
     "@changesets/cli": "^2.31.0",

@@ -1,6 +1,9 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@2.3.0/schema.json",
-  "changelog": ["@changesets/changelog-github", { "repo": "EpicAlbin03/prettier-plugin-django" }],
+  "changelog": [
+    "@changesets/changelog-github",
+    { "repo": "EpicAlbin03/prettier-plugin-django-templates" }
+  ],
   "commit": false,
   "fixed": [],
   "linked": [],
