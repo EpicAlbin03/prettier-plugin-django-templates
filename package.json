@@ -47,8 +47,8 @@
   },
   "homepage": "https://github.com/EpicAlbin03/prettier-plugin-django#readme",
   "devDependencies": {
+    "@changesets/changelog-github": "^0.5.1",
     "@changesets/cli": "^2.29.8",
-    "@svitejs/changesets-changelog-github-compact": "^1.1.0",
     "@rollup/plugin-alias": "^5.1.0",
     "@rollup/plugin-commonjs": "14.0.0",
     "@rollup/plugin-node-resolve": "11.0.1",

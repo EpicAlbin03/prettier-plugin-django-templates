@@ -35,4 +35,3 @@ npm i -D prettier prettier-plugin-django
 - README
 - LICENSE
 - CHANGELOG
-- Remove @svitejs/changesets-changelog-github-compact
