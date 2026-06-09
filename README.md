@@ -1,60 +1,71 @@
-# prettier-plugin-django
+# Prettier Plugin Django Templates
 
-Prettier plugin for Django templates.
-
-## What changed
-
-This repo now targets a modern toolchain:
-
-- Prettier 3
-- ESLint flat config (`eslint.config.js`)
-- Vite library build
-- Vitest snapshot tests
-- TypeScript 5.9.3 source
-- Bun for local development workflows
-- Django-only public parser surface
+Format Django templates with Prettier.
 
 ## Install
 
 ```bash
-bun add -d prettier prettier-plugin-django
+npm i -D prettier prettier-plugin-django-templates
 ```
 
-The published plugin stays a standard JavaScript package, but this repo now uses Bun for development workflows.
+## Usage
 
-## Use
-
-```bash
-bunx prettier --plugin prettier-plugin-django --parser django --write "**/*.django"
-```
-
-Example Prettier config:
+Add the plugin to your Prettier config:
 
 ```json
 {
+  "plugins": ["prettier-plugin-django-templates"]
+}
+```
+
+The plugin provides the `django-html` parser for Django templates in `.html` files. In most setups, adding the plugin is enough. If you need to force the parser for specific files, use a Prettier override:
+
+```json
+{
+  "plugins": ["prettier-plugin-django-templates"],
   "overrides": [
     {
-      "files": ["*.django"],
+      "files": "*.html",
       "options": {
-        "parser": "django"
+        "parser": "django-html"
       }
     }
   ]
 }
 ```
 
-## Options
+## Ignore sections
 
-- `djangoSingleQuote` - use single quotes in template strings
-- `djangoAlwaysBreakObjects` - always break object literals
-- `djangoPrintWidth` - override print width for Django templates
-- `djangoSpaceAroundFilters` - print spaces around `|`
-- `djangoOutputEndblockName` - print the block name in `endblock`
+Using range ignores is the best way to tell prettier to ignore part of files. Most of the time this is necessary for Django tags inside script or style tags:
 
-## Development
+```html
+<!-- prettier-ignore-start -->
+<script>
+  window.someData = {{ data|safe }}
+</script>
+<!-- prettier-ignore-end -->
 
-```bash
-bun install
-bun run build
-bun run check
+<!-- prettier-ignore-start -->
+<style>
+  :root { --accent-color: {{ theme_accent_color }} }
+</style>
+<!-- prettier-ignore-end -->
 ```
+
+Or using Django comments:
+
+```html
+{# prettier-ignore-start #}
+<script>
+  window.someData = {{ data|safe }}
+</script>
+{# prettier-ignore-end #} {# prettier-ignore-start #}
+<style>
+  :root { --accent-color: {{ theme_accent_color }} }
+</style>
+{# prettier-ignore-end #}
+```
+
+## Usage in the browser
+
+Usage in the browser is semi-supported. You can import the plugin from `prettier-plugin-django-templates/browser` to get a version that depends on `prettier/standalone` and therefore doesn't use any node APIs. What isn't supported in a good way yet is using this without a build step - you still need a bundler like Vite to build everything together as one self-contained package in advance.

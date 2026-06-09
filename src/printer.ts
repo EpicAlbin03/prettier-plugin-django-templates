@@ -1,165 +1,393 @@
-// @ts-nocheck
+import type { AstPath, Doc, Options, Printer } from 'prettier';
+import { builders, utils } from 'prettier/doc';
+import type { BlockNode, DjangoNode, ExpressionNode, RawNode, StatementNode } from './ast';
 
-import { ORIGINAL_SOURCE } from './parser.js'
-import { printAliasExpression } from './print/AliasExpression.js'
-import { printArrayExpression } from './print/ArrayExpression.js'
-import { printAttribute } from './print/Attribute.js'
-import { printAutoescapeBlock } from './print/AutoescapeBlock.js'
-import { printBinaryExpression } from './print/BinaryExpression.js'
-import { printBlockStatement } from './print/BlockStatement.js'
-import { printCallExpression } from './print/CallExpression.js'
-import { printConditionalExpression } from './print/ConditionalExpression.js'
-import { printDeclaration } from './print/Declaration.js'
-import { printElement } from './print/Element.js'
-import { printExpressionStatement } from './print/ExpressionStatement.js'
-import { printExtendsStatement } from './print/ExtendsStatement.js'
-import { printFilterBlockStatement } from './print/FilterBlockStatement.js'
-import { printFilterExpression } from './print/FilterExpression.js'
-import { printForStatement } from './print/ForStatement.js'
-import { printGenericToken } from './print/GenericToken.js'
-import { printGenericTwigTag } from './print/GenericTwigTag.js'
-import { printHtmlComment } from './print/HtmlComment.js'
-import { printIdentifier } from './print/Identifier.js'
-import { printIfStatement } from './print/IfStatement.js'
-import { printIncludeStatement } from './print/IncludeStatement.js'
-import { printMemberExpression } from './print/MemberExpression.js'
-import { printNamedArgumentExpression } from './print/NamedArgumentExpression.js'
-import { printObjectExpression } from './print/ObjectExpression.js'
-import { printObjectProperty } from './print/ObjectProperty.js'
-import { printSequenceExpression } from './print/SequenceExpression.js'
-import { printSliceExpression } from './print/SliceExpression.js'
-import { printSpacelessBlock } from './print/SpacelessBlock.js'
-import { printStringLiteral } from './print/StringLiteral.js'
-import { printTestExpression } from './print/TestExpression.js'
-import { printTextStatement } from './print/TextStatement.js'
-import { printTwigComment } from './print/TwigComment.js'
-import { printUnaryExpression } from './print/UnaryExpression.js'
-import { printUnarySubclass } from './print/UnarySubclass.js'
-import { printUrlStatement } from './print/UrlStatement.js'
-import { printWithStatement } from './print/WithStatement.js'
-import { isHtmlCommentEqualTo, isTwigCommentEqualTo, isWhitespaceNode } from './util'
-
-const printFunctions = {}
-
-const isHtmlIgnoreNextComment = isHtmlCommentEqualTo('prettier-ignore')
-const isHtmlIgnoreStartComment = isHtmlCommentEqualTo('prettier-ignore-start')
-const isHtmlIgnoreEndComment = isHtmlCommentEqualTo('prettier-ignore-end')
-const isTemplateIgnoreNextComment = isTwigCommentEqualTo('prettier-ignore')
-const isTemplateIgnoreStartComment = isTwigCommentEqualTo('prettier-ignore-start')
-const isTemplateIgnoreEndComment = isTwigCommentEqualTo('prettier-ignore-end')
-
-const isIgnoreNextComment = (value) => isHtmlIgnoreNextComment(value) || isTemplateIgnoreNextComment(value)
-const isIgnoreRegionStartComment = (value) => isHtmlIgnoreStartComment(value) || isTemplateIgnoreStartComment(value)
-const isIgnoreRegionEndComment = (value) => isHtmlIgnoreEndComment(value) || isTemplateIgnoreEndComment(value)
-
-let originalSource = ''
-let ignoreRegion = false
-let ignoreNext = false
-
-const shouldApplyIgnoreNext = (node) => !isWhitespaceNode(node)
-
-const checkForIgnoreStart = (node) => {
-  ignoreNext = (ignoreNext && !shouldApplyIgnoreNext(node)) || isIgnoreNextComment(node)
-  ignoreRegion = ignoreRegion || isIgnoreRegionStartComment(node)
+function getPlaceholderIds(node: BlockNode | { nodes: Record<string, DjangoNode> }): string[] {
+  return Object.keys(node.nodes).sort((left, right) => right.length - left.length);
 }
 
-const checkForIgnoreEnd = (node) => {
-  if (ignoreRegion && isIgnoreRegionEndComment(node)) {
-    ignoreRegion = false
+function replacePlaceholdersInString(
+  currentDoc: string,
+  ids: string[],
+  render: (id: string, context: { linePrefix: string; lineSuffix: string }) => Doc,
+): Doc {
+  const parts: Doc[] = [];
+  let cursor = 0;
+
+  while (cursor < currentDoc.length) {
+    let matchedId: string | undefined;
+    let matchedIndex = currentDoc.length;
+
+    for (const id of ids) {
+      const index = currentDoc.indexOf(id, cursor);
+      if (index !== -1 && index < matchedIndex) {
+        matchedId = id;
+        matchedIndex = index;
+      }
+    }
+
+    if (!matchedId) {
+      parts.push(currentDoc.slice(cursor));
+      break;
+    }
+
+    if (matchedIndex > cursor) {
+      parts.push(currentDoc.slice(cursor, matchedIndex));
+    }
+
+    const lineStart = currentDoc.lastIndexOf('\n', matchedIndex - 1) + 1;
+    const nextNewline = currentDoc.indexOf('\n', matchedIndex + matchedId.length);
+    const lineEnd = nextNewline === -1 ? currentDoc.length : nextNewline;
+    const linePrefix = currentDoc.slice(lineStart, matchedIndex);
+    const lineSuffix = currentDoc.slice(matchedIndex + matchedId.length, lineEnd);
+
+    parts.push(render(matchedId, { linePrefix, lineSuffix }));
+    cursor = matchedIndex + matchedId.length;
   }
+
+  return parts;
 }
 
-const canGetSubstringForNode = (node) =>
-  Boolean(
-    originalSource &&
-      node.loc &&
-      node.loc.start &&
-      node.loc.end &&
-      node.loc.start.index !== undefined &&
-      node.loc.end.index !== undefined
-  )
-
-const getSubstringForNode = (node) => originalSource.slice(node.loc.start.index, node.loc.end.index)
-
-const print = (path, options, printChild) => {
-  const node = path.getValue()
-  const nodeType = node.constructor.name
-
-  if (node[ORIGINAL_SOURCE]) {
-    originalSource = node[ORIGINAL_SOURCE]
-  }
-
-  if (options.djangoPrintWidth) {
-    options.printWidth = options.djangoPrintWidth
-  }
-
-  checkForIgnoreEnd(node)
-  const useOriginalSource = (shouldApplyIgnoreNext(node) && ignoreNext) || ignoreRegion
-  const hasPrintFunction = printFunctions[nodeType]
-
-  if (!useOriginalSource && hasPrintFunction) {
-    checkForIgnoreStart(node)
-    return printFunctions[nodeType](node, path, printChild, options)
-  }
-
-  if (!hasPrintFunction) {
-    console.warn(`No print function available for node type "${nodeType}"`)
-  }
-
-  checkForIgnoreStart(node)
-
-  if (canGetSubstringForNode(node)) {
-    return getSubstringForNode(node)
-  }
-
-  return ''
+function hasHtmlMarkup(content: string): boolean {
+  return /<(?!!--)[A-Za-z/!][^>]*>/.test(content);
 }
 
-const returnNodeValue = (node) => `${node.value}`
+function getPreservedSingleLineHtmlSegment(
+  node: BlockNode | { content: string; nodes: Record<string, DjangoNode> },
+  segment: string,
+): string | undefined {
+  const trimmedSegment = segment.trimEnd();
+  if (trimmedSegment.includes('\n')) {
+    return undefined;
+  }
 
-printFunctions.SequenceExpression = printSequenceExpression
-printFunctions.ConstantValue = (node) => node.value
-printFunctions.StringLiteral = printStringLiteral
-printFunctions.Identifier = printIdentifier
-printFunctions.UnaryExpression = printUnaryExpression
-printFunctions.BinaryExpression = printBinaryExpression
-printFunctions.BinarySubclass = printBinaryExpression
-printFunctions.UnarySubclass = printUnarySubclass
-printFunctions.TestExpression = printTestExpression
-printFunctions.ConditionalExpression = printConditionalExpression
-printFunctions.Element = printElement
-printFunctions.Attribute = printAttribute
-printFunctions.PrintTextStatement = printTextStatement
-printFunctions.PrintExpressionStatement = printExpressionStatement
-printFunctions.MemberExpression = printMemberExpression
-printFunctions.FilterExpression = printFilterExpression
-printFunctions.ObjectExpression = printObjectExpression
-printFunctions.ObjectProperty = printObjectProperty
-printFunctions.Fragment = (_node, path, printChild) => path.call(printChild, 'value')
-printFunctions.NumericLiteral = returnNodeValue
-printFunctions.BooleanLiteral = returnNodeValue
-printFunctions.NullLiteral = () => 'null'
-printFunctions.ArrayExpression = printArrayExpression
-printFunctions.CallExpression = printCallExpression
-printFunctions.NamedArgumentExpression = printNamedArgumentExpression
-printFunctions.SliceExpression = printSliceExpression
-printFunctions.AliasExpression = printAliasExpression
-printFunctions.BlockStatement = printBlockStatement
-printFunctions.SpacelessBlock = printSpacelessBlock
-printFunctions.AutoescapeBlock = printAutoescapeBlock
-printFunctions.IncludeStatement = printIncludeStatement
-printFunctions.UrlStatement = printUrlStatement
-printFunctions.WithStatement = printWithStatement
-printFunctions.IfStatement = printIfStatement
-printFunctions.ForStatement = printForStatement
-printFunctions.BinaryConcatExpression = printBinaryExpression
-printFunctions.ExtendsStatement = printExtendsStatement
-printFunctions.FilterBlockStatement = printFilterBlockStatement
-printFunctions.TwigComment = printTwigComment
-printFunctions.HtmlComment = printHtmlComment
-printFunctions.Declaration = printDeclaration
-printFunctions.GenericTwigTag = (node, path, printChild, options) => printGenericTwigTag(node, path, printChild, options)
-printFunctions.GenericToken = printGenericToken
-printFunctions.String = (value) => value
+  const match = trimmedSegment.match(/^<([A-Za-z][^\s/>]*)(?<attrs>[^>]*)>(?<body>[^<]*)<\/\1>$/);
+  if (!match?.groups) {
+    return undefined;
+  }
 
-export { print }
+  const attrAssignments = (match.groups.attrs.match(/=\s*"[^"]*"/g) ?? []).length;
+  if (attrAssignments !== 1) {
+    return undefined;
+  }
+
+  const bodyPlaceholders = match.groups.body.match(/DJ\d+X/g) ?? [];
+  if (bodyPlaceholders.length !== 1 || match.groups.body.trim() !== bodyPlaceholders[0]) {
+    return undefined;
+  }
+
+  const segmentNodes = Object.values(node.nodes).filter((entry) => trimmedSegment.includes(entry.id));
+  return segmentNodes.every((entry) => entry.placeholderKind === 'inline')
+    ? trimmedSegment
+    : undefined;
+}
+
+function splitAtStatements(node: BlockNode | { content: string; nodes: Record<string, DjangoNode> }): string[] {
+  const splitStandaloneStatements = !hasHtmlMarkup(node.content);
+  const splitters = Object.values(node.nodes)
+    .filter(
+      (entry): entry is StatementNode =>
+        entry.type === 'statement' &&
+        !entry.inTag &&
+        !entry.inAttribute &&
+        (['else', 'elif', 'empty', 'plural'].includes(entry.keyword) ||
+          (splitStandaloneStatements &&
+            entry.role === 'standalone' &&
+            entry.placeholderKind === 'block')),
+    )
+    .filter((entry) => node.content.includes(entry.id));
+
+  if (splitters.length === 0) {
+    return [node.content];
+  }
+
+  const pattern = new RegExp(
+    `(${splitters
+      .map((entry) => entry.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('|')})`,
+  );
+  return node.content.split(pattern).filter(Boolean);
+}
+
+function surroundingBlock(node: DjangoNode): BlockNode | undefined {
+  return Object.values(node.nodes).find(
+    (entry): entry is BlockNode => entry.type === 'block' && entry.content.includes(node.id),
+  );
+}
+
+function stripPlaceholderContext(value: string): string {
+  return value
+    .replace(/<!--DJ\d+-->/g, '')
+    .replace(/DJ\d+X/g, '')
+    .replace(/dj\d+=""/g, '');
+}
+
+function isInlineOnlyChildContext(linePrefix: string, lineSuffix: string): boolean {
+  const cleanPrefix = stripPlaceholderContext(linePrefix);
+  const cleanSuffix = stripPlaceholderContext(lineSuffix);
+
+  return /^\s*<[^/!][^>]*>\s*$/.test(cleanPrefix) && /^\s*<\/[^>]+>\s*$/.test(cleanSuffix);
+}
+
+function printBlockStandaloneStatement(
+  statement: Doc,
+  linePrefix: string,
+  lineSuffix: string,
+): Doc {
+  if (isInlineOnlyChildContext(linePrefix, lineSuffix)) {
+    return statement;
+  }
+
+  const cleanPrefix = stripPlaceholderContext(linePrefix);
+  const cleanSuffix = stripPlaceholderContext(lineSuffix);
+  const hasContentBefore = /\S/.test(cleanPrefix);
+  const hasContentAfter = /<!--DJ\d+-->|\S/.test(lineSuffix) || /\S/.test(cleanSuffix);
+  return [hasContentBefore ? builders.hardline : '', statement, hasContentAfter ? builders.hardline : ''];
+}
+
+function printExpression(node: ExpressionNode): Doc {
+  const expression = `{{ ${node.content.trim()} }}`;
+  if (node.preNewLines > 1) {
+    return builders.group([builders.trim, builders.hardline, expression]);
+  }
+  return expression;
+}
+
+function printRaw(node: RawNode): Doc {
+  if (node.keyword === 'comment' && node.args?.trim()) {
+    const body = (node.body ?? '').replace(/^\n+|\n+$/g, '').replace(/^(?=\S)/gm, '  ');
+
+    return [
+      `{%comment ${node.args.trim()} %}`,
+      builders.hardline,
+      body,
+      builders.hardline,
+      '{%endcomment%}',
+    ];
+  }
+
+  return node.originalText;
+}
+
+function printStatement(node: StatementNode): Doc {
+  const statement = `{% ${node.content.trim()} %}`;
+  const block = surroundingBlock(node);
+
+  if (
+    ['else', 'elif', 'empty', 'plural'].includes(node.keyword) &&
+    block &&
+    !block.inTag &&
+    !block.inAttribute
+  ) {
+    return [builders.dedent(builders.hardline), statement, builders.hardline];
+  }
+
+  if (node.preNewLines > 1) {
+    return builders.group([builders.trim, builders.hardline, statement]);
+  }
+
+  return statement;
+}
+
+function isBlockStandaloneStatement(
+  node: BlockNode | { content: string; nodes: Record<string, DjangoNode> },
+  segment: string | undefined,
+): boolean {
+  if (!segment) {
+    return false;
+  }
+
+  const currentNode = node.nodes[segment];
+  return (
+    currentNode?.type === 'statement' &&
+    currentNode.role === 'standalone' &&
+    currentNode.placeholderKind === 'block'
+  );
+}
+
+function segmentHasRenderableText(
+  node: BlockNode | { content: string; nodes: Record<string, DjangoNode> },
+  segment: string | undefined,
+): boolean {
+  if (!segment) {
+    return false;
+  }
+
+  let content = segment;
+  for (const id of getPlaceholderIds(node)) {
+    content = content.split(id).join('');
+  }
+
+  return /\S/.test(content);
+}
+
+function joinSegments(
+  node: BlockNode | { content: string; nodes: Record<string, DjangoNode> },
+  segments: string[],
+  mapped: Doc[],
+): Doc {
+  const docs: Doc[] = [];
+
+  for (const [index, segment] of segments.entries()) {
+    if (
+      isBlockStandaloneStatement(node, segment) &&
+      segmentHasRenderableText(node, segments[index - 1])
+    ) {
+      docs.push(builders.hardline);
+    }
+
+    docs.push(mapped[index]);
+
+    if (
+      isBlockStandaloneStatement(node, segment) &&
+      segmentHasRenderableText(node, segments[index + 1])
+    ) {
+      docs.push(builders.hardline);
+    }
+  }
+
+  return docs;
+}
+
+function buildBlock(
+  path: AstPath<DjangoNode>,
+  print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
+  block: BlockNode,
+  mapped: Doc,
+): Doc {
+  if (/^\s*$/.test(block.content)) {
+    return builders.group([
+      path.call(print, 'nodes', block.start.id),
+      builders.softline,
+      path.call(print, 'nodes', block.end.id),
+    ]);
+  }
+
+  if (!block.inTag && !block.inAttribute) {
+    return builders.group([
+      path.call(print, 'nodes', block.start.id),
+      builders.indent([builders.hardline, mapped]),
+      builders.hardline,
+      path.call(print, 'nodes', block.end.id),
+    ]);
+  }
+
+  return builders.group([
+    path.call(print, 'nodes', block.start.id),
+    mapped,
+    path.call(print, 'nodes', block.end.id),
+  ]);
+}
+
+export const print: Printer<DjangoNode>['print'] = (path) => {
+  const node = path.getNode();
+  if (!node) {
+    return '';
+  }
+
+  switch (node.type) {
+    case 'expression':
+      return printExpression(node);
+    case 'statement':
+      return printStatement(node);
+    case 'comment':
+      return node.originalText;
+    case 'raw':
+      return printRaw(node);
+    case 'ignore':
+      return node.originalText;
+    default:
+      return node.originalText;
+  }
+};
+
+export const embed: Printer<DjangoNode>['embed'] = () => {
+  return async (
+    textToDoc: (text: string, options: Options) => Promise<Doc>,
+    print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
+    path: AstPath<DjangoNode>,
+    options: Options,
+  ): Promise<Doc | undefined> => {
+    const node = path.getNode();
+    if (!node || (node.type !== 'root' && node.type !== 'block')) {
+      return undefined;
+    }
+
+    const ids = getPlaceholderIds(node);
+    const segments = splitAtStatements(node);
+    const mapped = await Promise.all(
+      segments.map(async (segment) => {
+        const preservedSegment = getPreservedSingleLineHtmlSegment(node, segment);
+        const doc = node.nodes[segment]
+          ? segment
+          : preservedSegment ??
+            (await textToDoc(segment, {
+              ...options,
+              parser: 'html',
+            }));
+
+        let ignoreDoc = false;
+
+        return utils.mapDoc(doc, (currentDoc) => {
+          if (typeof currentDoc !== 'string') {
+            return currentDoc;
+          }
+
+          if (currentDoc === '<!-- prettier-ignore -->') {
+            ignoreDoc = true;
+            return currentDoc;
+          }
+
+          if (!ids.some((id) => currentDoc.includes(id))) {
+            ignoreDoc = false;
+            return currentDoc;
+          }
+
+          return replacePlaceholdersInString(currentDoc, ids, (id, context) => {
+            const currentNode = node.nodes[id];
+            if (ignoreDoc) {
+              return currentNode.originalText;
+            }
+
+            const rendered = path.call(print, 'nodes', id);
+            if (
+              currentNode.type === 'statement' &&
+              currentNode.role === 'standalone' &&
+              currentNode.placeholderKind === 'block'
+            ) {
+              return printBlockStandaloneStatement(
+                rendered,
+                context.linePrefix,
+                context.lineSuffix,
+              );
+            }
+
+            return rendered;
+          });
+        });
+      }),
+    );
+
+    const joined = joinSegments(node, segments, mapped);
+
+    if (node.type === 'block') {
+      const block = buildBlock(path, print, node, joined);
+      if (node.preNewLines > 1) {
+        return builders.group([builders.trim, builders.hardline, block]);
+      }
+      return block;
+    }
+
+    return [joined, builders.hardline];
+  };
+};
+
+export function getVisitorKeys(ast: DjangoNode | Record<string, DjangoNode>): string[] {
+  if ('type' in ast) {
+    return ast.type === 'root' ? ['nodes'] : [];
+  }
+
+  return Object.values(ast)
+    .filter((node) => node.type === 'block')
+    .map((node) => node.id);
+}
