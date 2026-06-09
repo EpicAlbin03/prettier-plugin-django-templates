@@ -69,3 +69,12 @@ Or using Django comments:
 ## Usage in the browser
 
 Usage in the browser is semi-supported. You can import the plugin from `prettier-plugin-django-templates/browser` to get a version that depends on `prettier/standalone` and therefore doesn't use any node APIs. What isn't supported in a good way yet is using this without a build step - you still need a bundler like Vite to build everything together as one self-contained package in advance.
+
+## Credits
+
+- [prettier-plugin-jinja-template](https://github.com/davidodenwald/prettier-plugin-jinja-template/tree/master) (parser, printer, tests)
+- [prettier-plugin-svelte](https://github.com/sveltejs/prettier-plugin-svelte/tree/main) (tooling)
+
+## License
+
+Licensed under the [MIT license](https://github.com/EpicAlbin03/prettier-plugin-django-templates/blob/main/LICENSE).
