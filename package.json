@@ -38,6 +38,7 @@
     "prettier",
     "django"
   ],
+  "author": "Albin Carlsson <inquires@albincarlsson.com>",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/EpicAlbin03/prettier-plugin-django-templates/issues"
