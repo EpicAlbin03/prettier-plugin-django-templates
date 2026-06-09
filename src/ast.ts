@@ -55,6 +55,10 @@ export interface CommentNode extends BaseNode {
 
 export interface RawNode extends BaseNode {
   type: 'raw';
+  keyword?: string;
+  args?: string;
+  body?: string;
+  endArgs?: string;
 }
 
 export interface IgnoreNode extends BaseNode {

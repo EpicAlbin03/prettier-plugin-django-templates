@@ -52,6 +52,9 @@ interface TagToken extends TokenBase {
 interface RawBlockToken extends TokenBase {
   type: 'RawBlock';
   name: string;
+  args: string;
+  body: string;
+  endArgs: string;
 }
 
 type Token = TextToken | VariableToken | CommentToken | IgnoreBlockToken | TagToken | RawBlockToken;
@@ -166,13 +169,26 @@ function findIgnoreBlockEnd(text: string, from: number): number {
   return marker ? start + marker.length : text.length;
 }
 
-function findRawBlockClose(text: string, from: number, startName: string): number {
+function findRawBlockClose(
+  text: string,
+  from: number,
+  startName: string,
+): { start: number; end: number; raw: string; endArgs: string } | undefined {
   const escaped = startName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`\\{%\\s*end${escaped}(?:\\s+[^%]*?)?\\s*%\\}`, 'g');
+  const pattern = new RegExp(`\\{%\\s*end${escaped}(?<args>(?:\\s+[^%]*?)?)\\s*%\\}`, 'g');
   pattern.lastIndex = from;
   const match = pattern.exec(text);
 
-  return match ? match.index + match[0].length : text.length;
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    start: match.index,
+    end: match.index + match[0].length,
+    raw: match[0],
+    endArgs: match.groups?.args ?? '',
+  };
 }
 
 function tokenize(text: string): Token[] {
@@ -245,21 +261,24 @@ function tokenize(text: string): Token[] {
       const raw = text.slice(cursor, end);
       const tag = createTagToken(raw, cursor, end, tokenState);
 
-      if (isRawTag(tag.name) && tag.role === 'start') {
-        const rawEnd = findRawBlockClose(text, end, tag.name);
-        if (rawEnd > end) {
-          const rawBlock = text.slice(cursor, rawEnd);
+      if (isRawTag(tag.name) && tag.role === 'start' && !(tag.name === 'verbatim' && /\S/.test(tag.args))) {
+        const rawClose = findRawBlockClose(text, end, tag.name);
+        if (rawClose) {
+          const rawBlock = text.slice(cursor, rawClose.end);
           tokens.push({
             type: 'RawBlock',
             raw: rawBlock,
             content: rawBlock,
             name: tag.name,
+            args: tag.args,
+            body: text.slice(end, rawClose.start),
+            endArgs: rawClose.endArgs,
             start: cursor,
-            end: rawEnd,
+            end: rawClose.end,
             inAttribute: tokenState.inAttribute,
             inTag: tokenState.inTag,
           });
-          cursor = rawEnd;
+          cursor = rawClose.end;
           continue;
         }
       }
@@ -341,11 +360,30 @@ function matchesEnd(start: StatementNode, endName: string): boolean {
   return expectedEndNames(start.keyword).includes(endName);
 }
 
+const BRANCH_PARENTS: Record<string, string[]> = {
+  elif: ['if'],
+  else: ['if', 'for', 'ifchanged'],
+  empty: ['for'],
+  plural: ['blocktranslate', 'blocktrans'],
+};
+
+function hasMatchingBranchParent(token: TagToken, stack: StatementNode[]): boolean {
+  return BRANCH_PARENTS[token.name]?.includes(stack[stack.length - 1]?.keyword) ?? false;
+}
+
 function actsAsEndTag(token: TagToken, stack: StatementNode[]): boolean {
   return token.role === 'end' || stack.some((entry) => matchesEnd(entry, token.name));
 }
 
+function isStandaloneUrlAssignment(tag: TagToken): boolean {
+  return tag.name === 'url' && /\bas\s+\S+$/.test(tag.args);
+}
+
 function shouldInlineStandalone(tag: TagToken): boolean {
+  if (isStandaloneUrlAssignment(tag) && !tag.inAttribute && !tag.inTag) {
+    return false;
+  }
+
   return isInlineStandaloneTag(tag.name) || tag.inAttribute || tag.inTag;
 }
 
@@ -489,6 +527,10 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
         placeholderKind: placeholderKindForToken(token, !token.inTag && !token.inAttribute),
         inTag: token.inTag,
         inAttribute: token.inAttribute,
+        keyword: token.name,
+        args: token.args,
+        body: token.body,
+        endArgs: token.endArgs,
       };
       nodes[id] = node;
       root.content = replaceAt(root.content, id, currentIndex, token.raw.length);
@@ -512,6 +554,12 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
     } as const;
 
     if (token.role === 'branch') {
+      if (!hasMatchingBranchParent(token, stack)) {
+        throw new Error(
+          `No opening statement found for branch statement "${statementBase.originalText}".`,
+        );
+      }
+
       const node: StatementNode = { type: 'statement', ...statementBase };
       nodes[node.id] = node;
       root.content = replaceAt(root.content, node.id, currentIndex, token.raw.length);
