@@ -76,13 +76,17 @@ function getPreservedSingleLineHtmlSegment(
     return undefined;
   }
 
-  const segmentNodes = Object.values(node.nodes).filter((entry) => trimmedSegment.includes(entry.id));
+  const segmentNodes = Object.values(node.nodes).filter((entry) =>
+    trimmedSegment.includes(entry.id),
+  );
   return segmentNodes.every((entry) => entry.placeholderKind === 'inline')
     ? trimmedSegment
     : undefined;
 }
 
-function splitAtStatements(node: BlockNode | { content: string; nodes: Record<string, DjangoNode> }): string[] {
+function splitAtStatements(
+  node: BlockNode | { content: string; nodes: Record<string, DjangoNode> },
+): string[] {
   const splitStandaloneStatements = !hasHtmlMarkup(node.content);
   const splitters = Object.values(node.nodes)
     .filter(
@@ -102,9 +106,7 @@ function splitAtStatements(node: BlockNode | { content: string; nodes: Record<st
   }
 
   const pattern = new RegExp(
-    `(${splitters
-      .map((entry) => entry.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-      .join('|')})`,
+    `(${splitters.map((entry) => entry.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
   );
   return node.content.split(pattern).filter(Boolean);
 }
@@ -142,7 +144,11 @@ function printBlockStandaloneStatement(
   const cleanSuffix = stripPlaceholderContext(lineSuffix);
   const hasContentBefore = /\S/.test(cleanPrefix);
   const hasContentAfter = /<!--DJ\d+-->|\S/.test(lineSuffix) || /\S/.test(cleanSuffix);
-  return [hasContentBefore ? builders.hardline : '', statement, hasContentAfter ? builders.hardline : ''];
+  return [
+    hasContentBefore ? builders.hardline : '',
+    statement,
+    hasContentAfter ? builders.hardline : '',
+  ];
 }
 
 function printExpression(node: ExpressionNode): Doc {
@@ -320,11 +326,11 @@ export const embed: Printer<DjangoNode>['embed'] = () => {
         const preservedSegment = getPreservedSingleLineHtmlSegment(node, segment);
         const doc = node.nodes[segment]
           ? segment
-          : preservedSegment ??
+          : (preservedSegment ??
             (await textToDoc(segment, {
               ...options,
               parser: 'html',
-            }));
+            })));
 
         let ignoreDoc = false;
 

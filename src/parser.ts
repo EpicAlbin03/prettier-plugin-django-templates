@@ -261,7 +261,11 @@ function tokenize(text: string): Token[] {
       const raw = text.slice(cursor, end);
       const tag = createTagToken(raw, cursor, end, tokenState);
 
-      if (isRawTag(tag.name) && tag.role === 'start' && !(tag.name === 'verbatim' && /\S/.test(tag.args))) {
+      if (
+        isRawTag(tag.name) &&
+        tag.role === 'start' &&
+        !(tag.name === 'verbatim' && /\S/.test(tag.args))
+      ) {
         const rawClose = findRawBlockClose(text, end, tag.name);
         if (rawClose) {
           const rawBlock = text.slice(cursor, rawClose.end);

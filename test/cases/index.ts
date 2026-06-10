@@ -23,9 +23,7 @@ for (const caseName of cases) {
     const input = readFileSync(`${base}/input.html`, 'utf-8').replace(/\r?\n/g, '\n');
     const expected = readFileSync(`${base}/expected.html`, 'utf-8').replace(/\r?\n/g, '\n');
     const configPath = `${base}/config.json`;
-    const options = existsSync(configPath)
-      ? JSON.parse(readFileSync(configPath, 'utf-8'))
-      : {};
+    const options = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf-8')) : {};
 
     const expectedError = expected.match(/Error\(`(?<message>[\s\S]*)`\)/)?.groups?.message;
 
