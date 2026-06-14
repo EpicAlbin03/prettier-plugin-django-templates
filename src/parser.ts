@@ -366,7 +366,7 @@ function matchesEnd(start: StatementNode, endName: string): boolean {
 
 const BRANCH_PARENTS: Record<string, string[]> = {
   elif: ['if'],
-  else: ['if', 'for', 'ifchanged'],
+  else: ['if', 'for', 'ifchanged', 'ifequal', 'ifnotequal'],
   empty: ['for'],
   plural: ['blocktranslate', 'blocktrans'],
 };

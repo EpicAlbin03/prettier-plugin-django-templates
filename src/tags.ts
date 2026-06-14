@@ -7,6 +7,8 @@ const START_TAGS = new Set([
   'with',
   'autoescape',
   'ifchanged',
+  'ifequal',
+  'ifnotequal',
   'spaceless',
   'blocktranslate',
   'blocktrans',
@@ -18,6 +20,7 @@ const START_TAGS = new Set([
   'partialdef',
   'verbatim',
   'comment',
+  'thumbnail',
 ]);
 
 const BRANCH_TAGS = new Set(['elif', 'else', 'empty', 'plural']);
