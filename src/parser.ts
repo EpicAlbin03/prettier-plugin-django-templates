@@ -537,7 +537,7 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
     if (token.role === 'branch') {
       if (!hasMatchingBranchParent(token, stack)) {
         throw new Error(
-          `No opening statement found for branch statement "${templateTagBase.originalText}".`,
+          `No start tag found for template branch tag "${templateTagBase.originalText}".`,
         );
       }
 
@@ -562,7 +562,7 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
 
       if (matchIndex === NOT_FOUND) {
         throw new Error(
-          `No opening statement found for closing statement "${endNode.originalText}".`,
+          `No start tag found for template end tag "${endNode.originalText}".`,
         );
       }
 
@@ -596,7 +596,7 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
 
     if (token.role === 'end') {
       throw new Error(
-        `No opening statement found for closing statement "${templateTagBase.originalText}".`,
+        `No start tag found for template end tag "${templateTagBase.originalText}".`,
       );
     }
 
