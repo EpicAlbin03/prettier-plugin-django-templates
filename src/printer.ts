@@ -1,6 +1,11 @@
 import type { AstPath, Doc, Options, Printer } from 'prettier';
-import { builders, utils } from 'prettier/doc';
+import { doc, util } from 'prettier';
 import type { BlockNode, DjangoNode, ExpressionNode, RawNode, StatementNode } from './ast';
+
+const { builders } = doc;
+const { mapDoc } = util as typeof util & {
+  mapDoc: (doc: Doc, cb: (currentDoc: Doc) => Doc) => Doc;
+};
 
 function getPlaceholderIds(node: BlockNode | { nodes: Record<string, DjangoNode> }): string[] {
   return Object.keys(node.nodes).sort((left, right) => right.length - left.length);
@@ -334,7 +339,7 @@ export const embed: Printer<DjangoNode>['embed'] = () => {
 
         let ignoreDoc = false;
 
-        return utils.mapDoc(doc, (currentDoc) => {
+        return mapDoc(doc, (currentDoc) => {
           if (typeof currentDoc !== 'string') {
             return currentDoc;
           }
