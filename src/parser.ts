@@ -1,12 +1,5 @@
 import type { Parser } from 'prettier';
-import {
-  getTagRole,
-  isBlockStandaloneTag,
-  isBranchTag,
-  isEndTag,
-  isInlineStandaloneTag,
-  isRawTag,
-} from './tags';
+import { getTagRole, isBlockStandaloneTag, isBranchTag, isEndTag, isInlineStandaloneTag } from './tags';
 import type {
   TemplateBlockNode,
   CommentNode,
@@ -176,28 +169,6 @@ function findIgnoreBlockEnd(text: string, from: number): number {
   return marker ? start + marker.length : text.length;
 }
 
-function findRawBlockClose(
-  text: string,
-  from: number,
-  startName: string,
-): { start: number; end: number; raw: string; endArgs: string } | undefined {
-  const escaped = startName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`\\{%\\s*end${escaped}(?<args>(?:\\s+[^%]*?)?)\\s*%\\}`, 'g');
-  pattern.lastIndex = from;
-  const match = pattern.exec(text);
-
-  if (!match) {
-    return undefined;
-  }
-
-  return {
-    start: match.index,
-    end: match.index + match[0].length,
-    raw: match[0],
-    endArgs: match.groups?.args ?? '',
-  };
-}
-
 function tokenize(text: string): Token[] {
   const state = getHtmlState(text);
   const tokens: Token[] = [];
@@ -267,32 +238,6 @@ function tokenize(text: string): Token[] {
       const end = readUntil(text, cursor + 2, '%}');
       const raw = text.slice(cursor, end);
       const tag = createTagToken(raw, cursor, end, tokenState);
-
-      if (
-        isRawTag(tag.name) &&
-        tag.role === 'start' &&
-        !(tag.name === 'verbatim' && /\S/.test(tag.args))
-      ) {
-        const rawClose = findRawBlockClose(text, end, tag.name);
-        if (rawClose) {
-          const rawBlock = text.slice(cursor, rawClose.end);
-          tokens.push({
-            type: 'RawBlock',
-            raw: rawBlock,
-            content: rawBlock,
-            name: tag.name,
-            args: tag.args,
-            body: text.slice(end, rawClose.start),
-            endArgs: rawClose.endArgs,
-            start: cursor,
-            end: rawClose.end,
-            inAttribute: tokenState.inAttribute,
-            inTag: tokenState.inTag,
-          });
-          cursor = rawClose.end;
-          continue;
-        }
-      }
 
       tokens.push(tag);
       cursor = end;
@@ -592,7 +537,7 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
     if (token.role === 'branch') {
       if (!hasMatchingBranchParent(token, stack)) {
         throw new Error(
-          `No opening template tag found for branch template tag "${templateTagBase.originalText}".`,
+          `No opening statement found for branch statement "${templateTagBase.originalText}".`,
         );
       }
 
@@ -617,7 +562,7 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
 
       if (matchIndex === NOT_FOUND) {
         throw new Error(
-          `No opening template tag found for closing template tag "${endNode.originalText}".`,
+          `No opening statement found for closing statement "${endNode.originalText}".`,
         );
       }
 
@@ -651,7 +596,7 @@ export const parse: Parser<DjangoNode>['parse'] = (text) => {
 
     if (token.role === 'end') {
       throw new Error(
-        `No opening template tag found for closing template tag "${templateTagBase.originalText}".`,
+        `No opening statement found for closing statement "${templateTagBase.originalText}".`,
       );
     }
 

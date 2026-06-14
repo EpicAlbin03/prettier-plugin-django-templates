@@ -1,6 +1,6 @@
 import type { AstPath, Doc, Options, Printer } from 'prettier';
 import { doc } from 'prettier';
-import type { TemplateBlockNode, DjangoNode, ExpressionNode, RawBlockNode, TemplateTagNode } from './ast';
+import type { RootNode, TemplateBlockNode, DjangoNode, ExpressionNode, RawBlockNode, TemplateTagNode } from './ast';
 
 const { builders, utils } = doc;
 const { mapDoc } = utils;
@@ -14,7 +14,12 @@ function replaceProtectedMarkersInString(
   ids: string[],
   render: (
     id: string,
-    context: { linePrefix: string; lineSuffix: string; hasNewlineBefore: boolean },
+    context: {
+      linePrefix: string;
+      lineSuffix: string;
+      hasNewlineBefore: boolean;
+      hasProtectedMarkerOnNextLine: boolean;
+    },
   ) => { doc: Doc; trimLeadingWhitespace?: boolean; trimFollowingWhitespace?: boolean },
 ): Doc {
   const parts: Doc[] = [];
@@ -44,7 +49,15 @@ function replaceProtectedMarkersInString(
     const linePrefix = currentDoc.slice(lineStart, matchedIndex);
     const lineSuffix = currentDoc.slice(matchedId.length + matchedIndex, lineEnd);
     const hasNewlineBefore = lineStart > 0;
-    const rendered = render(matchedId, { linePrefix, lineSuffix, hasNewlineBefore });
+    const hasProtectedMarkerOnNextLine = /^\n(?:<!--DJ\d+-->|DJ\d+X)/.test(
+      currentDoc.slice(matchedIndex + matchedId.length),
+    );
+    const rendered = render(matchedId, {
+      linePrefix,
+      lineSuffix,
+      hasNewlineBefore,
+      hasProtectedMarkerOnNextLine,
+    });
 
     if (matchedIndex > cursor) {
       const between = currentDoc.slice(cursor, matchedIndex);
@@ -112,7 +125,7 @@ function splitAtTemplateTags(
         !entry.inTag &&
         !entry.inAttribute &&
         (['else', 'elif', 'empty', 'plural'].includes(entry.keyword) ||
-          (splitStandaloneTemplateTags &&
+          ((splitStandaloneTemplateTags || node.content.startsWith(entry.id)) &&
             entry.role === 'standalone' &&
             entry.protectedMarkerKind === 'block')),
     )
@@ -155,23 +168,29 @@ function isInlineOnlyChildContext(linePrefix: string, lineSuffix: string): boole
   return /^\s*<[^/!][^>]*>\s*$/.test(cleanPrefix) && /^\s*<\/[^>]+>\s*$/.test(cleanSuffix);
 }
 
-function printStandaloneDocumentFlowTemplateTag(
-  templateTag: Doc,
+function printDocumentFlowNode(
+  renderedNode: Doc,
   linePrefix: string,
   lineSuffix: string,
   inlineWithNext = false,
+  hasProtectedMarkerOnNextLine = false,
 ): Doc {
   if (isInlineOnlyChildContext(linePrefix, lineSuffix)) {
-    return templateTag;
+    return renderedNode;
   }
 
   const cleanPrefix = stripProtectedMarkerContext(linePrefix);
   const cleanSuffix = stripProtectedMarkerContext(lineSuffix);
   const hasContentBefore = /\S/.test(cleanPrefix);
-  const hasContentAfter = !inlineWithNext && (/<!--DJ\d+-->|\S/.test(lineSuffix) || /\S/.test(cleanSuffix));
+  const hasContentAfter =
+    !inlineWithNext &&
+    (/<!--DJ\d+-->|\S/.test(lineSuffix) ||
+      /\S/.test(cleanSuffix) ||
+      hasProtectedMarkerOnNextLine);
+
   return [
     hasContentBefore ? builders.hardline : '',
-    templateTag,
+    renderedNode,
     hasContentAfter ? builders.hardline : '',
   ];
 }
@@ -242,6 +261,13 @@ function isStandaloneDocumentFlowTemplateTag(
   );
 }
 
+function isTemplateBlockSegment(
+  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
+  segment: string | undefined,
+): boolean {
+  return Boolean(segment && node.nodes[segment]?.type === 'template-block');
+}
+
 function segmentHasRenderableText(
   node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
   segment: string | undefined,
@@ -256,6 +282,39 @@ function segmentHasRenderableText(
   }
 
   return /\S/.test(content);
+}
+
+function splitLeadingStandaloneBlockTag(
+  node: RootNode | { content: string; nodes: Record<string, DjangoNode> },
+): string[] | undefined {
+  const match = node.content.match(/^(<!--DJ\d+-->)/);
+  if (!match) {
+    return undefined;
+  }
+
+  const [firstId] = match;
+  const firstNode = node.nodes[firstId];
+  const rest = node.content.slice(firstId.length);
+  const trimmedRest = rest.trimEnd();
+  const nextMatch = trimmedRest.match(/^(<!--DJ\d+-->)/);
+  if (!nextMatch) {
+    return undefined;
+  }
+
+  const nextNode = node.nodes[nextMatch[1]];
+
+  if (
+    firstNode?.type !== 'template-tag' ||
+    firstNode.keyword !== 'load' ||
+    firstNode.role !== 'standalone' ||
+    firstNode.protectedMarkerKind !== 'block' ||
+    nextNode?.type !== 'template-block' ||
+    trimmedRest !== nextMatch[1]
+  ) {
+    return undefined;
+  }
+
+  return [firstId, trimmedRest];
 }
 
 function joinSegments(
@@ -277,7 +336,8 @@ function joinSegments(
 
     if (
       isStandaloneDocumentFlowTemplateTag(node, segment) &&
-      segmentHasRenderableText(node, segments[index + 1])
+      (segmentHasRenderableText(node, segments[index + 1]) ||
+        isTemplateBlockSegment(node, segments[index + 1]))
     ) {
       docs.push(builders.hardline);
     }
@@ -293,19 +353,9 @@ function buildBlock(
   mapped: Doc,
 ): Doc {
   if (/^\s*$/.test(block.content)) {
-    const newlineCount = (block.content.match(/\n/g) ?? []).length;
-    if (newlineCount <= 1 || block.inTag || block.inAttribute) {
-      return builders.group([
-        path.call(print, 'nodes', block.start.id),
-        builders.softline,
-        path.call(print, 'nodes', block.end.id),
-      ]);
-    }
-
     return builders.group([
       path.call(print, 'nodes', block.start.id),
-      builders.hardline,
-      builders.hardline,
+      block.inTag || block.inAttribute ? builders.softline : '',
       path.call(print, 'nodes', block.end.id),
     ]);
   }
@@ -377,13 +427,13 @@ function getStandaloneLeadingSpacing(
 
   const before = container.content.slice(0, index);
 
-  if (hasHtmlMarkup(container.content)) {
-    return undefined;
-  }
-
   const previousMatch = before.match(/(<!--DJ\d+-->|DJ\d+X)(?<gap>\s*)$/);
   const previousId = previousMatch?.[1];
   const previousNode = previousId ? container.nodes[previousId] : undefined;
+
+  if (hasHtmlMarkup(container.content)) {
+    return undefined;
+  }
 
   if (!isStandaloneBlockLikeNode(previousNode)) {
     return undefined;
@@ -459,6 +509,23 @@ function restoreInlineProtectedMarkerRuns(
   return restored;
 }
 
+function normalizeHtmlAroundProtectedMarkers(currentDoc: string): string {
+  return currentDoc
+    .replace(/(<[^/!][^<>]*?)\s*\n\s*>/g, '$1>')
+    .replace(/<\/([^>\s]+)\s*\n\s*>/g, '</$1>')
+    .replace(/(<\/[^>]+>)(<!--DJ\d+-->)/g, '$1\n$2')
+    .replace(
+      /^(?<indent>\s*)(?<open><([A-Za-z][^\s/>]*)(?:[^>]*)>)(?<body>DJ\d+X)(?<close><\/\3>)(?<trail>\s*)$/gm,
+      (match, indent, open, _tagName, body, close, trail) => {
+        if (((open.match(/\s+\S+=/g) ?? []).length) <= 1) {
+          return match;
+        }
+
+        return `${indent}${open}\n${indent}  ${body}\n${indent}${close}${trail}`;
+      },
+    );
+}
+
 function prepareSegmentForHtml(
   segment: string,
   ids: string[],
@@ -479,6 +546,17 @@ function prepareSegmentForHtml(
       return token;
     },
   );
+
+  prepared = prepared
+    .replace(/(<!--DJ\d+-->)(<!--DJ\d+-->)/g, '$1\n$2')
+    .replace(/(<\/[^>]+>)(<!--DJ\d+-->)/g, '$1\n$2')
+    .replace(
+      /^(?<open><([A-Za-z][^\s/>]*)(?:[^>]*)>)(?<body>DJ\d+X)(?<close><\/\2>)(?<trail>\s*)$/,
+      (match, open, _tagName, body, close, trail) =>
+        ((open.match(/\s+\S+=/g) ?? []).length > 1
+          ? `${open}\n  ${body}\n${close}${trail}`
+          : match),
+    );
 
   prepared = prepared.replace(/(<script\b[^>]*>)([\s\S]*?)(<\/script>)/gi, (match, _openTag, body) => {
     if (ids.some((id) => body.includes(id)) || /\{[%#{]/.test(body)) {
@@ -504,7 +582,17 @@ export const embed: Printer<DjangoNode>['embed'] = () => {
     }
 
     const ids = getProtectedMarkerIds(node);
-    const segments = splitAtTemplateTags(node);
+    const leadingStandaloneSplit = node.type === 'root' ? splitLeadingStandaloneBlockTag(node) : undefined;
+    if (leadingStandaloneSplit && node.nodes[leadingStandaloneSplit[1]]?.type === 'template-block') {
+      return [
+        path.call(print, 'nodes', leadingStandaloneSplit[0]),
+        builders.hardline,
+        path.call(print, 'nodes', leadingStandaloneSplit[1]),
+        builders.hardline,
+      ];
+    }
+
+    const segments = leadingStandaloneSplit ?? splitAtTemplateTags(node);
     const mapped = await Promise.all(
       segments.map(async (segment) => {
         const preservedSegment = getPreservedSingleLineHtmlSegment(node, segment);
@@ -551,7 +639,9 @@ export const embed: Printer<DjangoNode>['embed'] = () => {
             return plainDoc;
           }
 
-          currentDoc = restoreInlineProtectedMarkerRuns(currentDoc, node);
+          currentDoc = normalizeHtmlAroundProtectedMarkers(
+            restoreInlineProtectedMarkerRuns(currentDoc, node),
+          );
 
           let replacedDoc = replaceProtectedMarkersInString(currentDoc, ids, (id, context) => {
             const currentNode = node.nodes[id];
@@ -570,16 +660,27 @@ export const embed: Printer<DjangoNode>['embed'] = () => {
               const inlineWithNext = shouldInlineWithFollowingProtectedMarker(node, currentNode);
               return {
                 doc: [
-                  printStandaloneDocumentFlowTemplateTag(
+                  printDocumentFlowNode(
                     restored,
                     context.linePrefix,
                     context.lineSuffix,
                     inlineWithNext,
+                    context.hasProtectedMarkerOnNextLine,
                   ),
                   inlineWithNext ? ' ' : '',
                 ],
                 trimLeadingWhitespace: Boolean(leadingSpacing),
                 trimFollowingWhitespace: inlineWithNext,
+              };
+            }
+
+            if (
+              currentNode.type === 'template-block' &&
+              /<\/[^>]+>\s*$/.test(stripProtectedMarkerContext(context.linePrefix))
+            ) {
+              return {
+                doc: printDocumentFlowNode(restored, context.linePrefix, context.lineSuffix),
+                trimLeadingWhitespace: Boolean(leadingSpacing),
               };
             }
 
@@ -615,7 +716,11 @@ export const embed: Printer<DjangoNode>['embed'] = () => {
       return buildBlock(path, print, node, joined);
     }
 
-    return [joined, builders.hardline];
+    const normalizedRoot = mapDoc(joined, (docPart) =>
+      typeof docPart === 'string' ? docPart.replace(/%}(?={% )/g, '%}\n') : docPart,
+    );
+
+    return [normalizedRoot, builders.hardline];
   };
 };
 
