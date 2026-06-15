@@ -1,5 +1,11 @@
 # prettier-plugin-django-templates changelog
 
+## 0.1.1
+
+### Patch Changes
+
+- [#7](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/7) [`8eb9f36`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/8eb9f3660232f169685061dea0c363a002042af8) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - migrated from rollup to rolldown, build goes vrooom
+
 ## 0.1.0
 
 ### Minor Changes
