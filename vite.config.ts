@@ -3,6 +3,9 @@ import { defineConfig } from "vite-plus";
 const externalPrettier = /^prettier($|\/)/;
 
 export default defineConfig({
+  test: {
+    include: ["test/**/*.ts"],
+  },
   staged: {
     "*": "vp check --fix",
   },
