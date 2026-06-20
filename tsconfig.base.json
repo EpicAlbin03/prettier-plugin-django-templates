@@ -1,0 +1,15 @@
+{
+  "compileOnSave": true,
+  "compilerOptions": {
+    "target": "ES2015",
+    "composite": true,
+    "moduleResolution": "node",
+    "module": "ES2020",
+    "esModuleInterop": true,
+    "removeComments": false,
+    "sourceMap": true,
+    "declaration": true,
+    "lib": ["ES2024", "dom"],
+    "strict": true
+  }
+}

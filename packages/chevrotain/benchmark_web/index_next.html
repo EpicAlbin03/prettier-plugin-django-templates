@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+  <head lang="en">
+    <link rel="stylesheet" type="text/css" href="style.css" />
+    <meta charset="UTF-8" />
+    <title></title>
+  </head>
+  <body>
+    <script src="https://unpkg.com/lodash@4.17.2/lodash.min.js"></script>
+    <script src="https://unpkg.com/benchmark@2.1.2"></script>
+
+    <script
+      src="https://code.jquery.com/jquery-3.1.0.slim.min.js"
+      integrity="sha256-cRpWjoSOw5KcyIOaZNo4i6fZ9tKPhYYb6i5T9RSVJG8="
+      crossorigin="anonymous"
+    ></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tinysort/2.3.6/tinysort.min.js"></script>
+
+    <div class="container">
+      <h1 style="text-align: center">Next</h1>
+      <div id="browser-info"></div>
+      <div id="options-info"></div>
+      <script>
+        document.getElementById("browser-info").textContent =
+          navigator.userAgent;
+      </script>
+      <!-- left part -->
+      <div class="row">
+        <!--right part-->
+        <div class="col-lg-6">
+          <div id="resultsContainer">
+            <button onclick="onRunAll()" id="runAllButton">
+              Run Lex And Parse
+            </button>
+            <button
+              onclick="onRunAll({ lexerOnly: true, parserOnly: false })"
+              id="runAllButton_lexer"
+            >
+              Run Lexer Only
+            </button>
+            <button
+              onclick="onRunAll({ lexerOnly: false, parserOnly: true })"
+              id="runAllButton_parser"
+            >
+              Run Parser Only
+            </button>
+            <br />
+            <button
+              onclick="onRunAll({ initLexer: true, initParser: false })"
+              id="runAllButton_initLexer"
+            >
+              Init Lexer
+            </button>
+            <button
+              onclick="onRunAll({ initLexer: false, initParser: true })"
+              id="runAllButton_initParser"
+            >
+              Init Parser
+            </button>
+            <button
+              onclick="onRunAll({ initLexer: true, initParser: true })"
+              id="runAllButton_initBoth"
+            >
+              Init Lexer + Parser
+            </button>
+            <div id="wait" style="margin-left: auto; margin-right: auto">
+              &nbsp;
+            </div>
+            <div
+              id="warmup-status"
+              style="margin-left: auto; margin-right: auto"
+            >
+              &nbsp;
+            </div>
+            <div class="headerRow">
+              <div class="benchName">Grammar</div>
+              <div class="benchRate">Ops/sec</div>
+              <div class="benchTime">Avg Time</div>
+              <div class="benchSpeed">Relative Speed</div>
+              <div class="benchInclude">?</div>
+            </div>
+
+            <div id="dataRows">
+              <div class="dataRow JSON">
+                <div class="benchName">
+                  <a>JSON</a>
+                </div>
+                <div class="benchRate">
+                  <div class="value">&nbsp;</div>
+                  <div class="delta">&nbsp;</div>
+                </div>
+                <div class="benchTime">&nbsp;</div>
+                <div class="benchSpeed">&nbsp;</div>
+                <div class="benchInclude">
+                  <input type="checkbox" checked="checked" />
+                </div>
+              </div>
+
+              <div class="dataRow CSS">
+                <div class="benchName">
+                  <a>CSS</a>
+                </div>
+                <div class="benchRate">
+                  <div class="value">&nbsp;</div>
+                  <div class="delta">&nbsp;</div>
+                </div>
+                <div class="benchTime">&nbsp;</div>
+                <div class="benchSpeed">&nbsp;</div>
+                <div class="benchInclude">
+                  <input type="checkbox" checked="checked" />
+                </div>
+              </div>
+
+              <div class="dataRow ECMA5">
+                <div class="benchName">
+                  <a>ECMA5</a>
+                </div>
+                <div class="benchRate">
+                  <div class="value">&nbsp;</div>
+                  <div class="delta">&nbsp;</div>
+                </div>
+                <div class="benchTime">&nbsp;</div>
+                <div class="benchSpeed">&nbsp;</div>
+                <div class="benchInclude">
+                  <input type="checkbox" checked="checked" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <hr style="margin-top: 140px" />
+      <p style="font-size: 0.85em; color: #666; text-align: center">
+        <strong>Note:</strong> The ECMA5 grammar uses a custom lexer (Acorn),
+        not Chevrotain's Lexer. ECMA5 results are only shown for parser-only
+        variants. All other variants display "N/A" for ECMA5.
+      </p>
+      <p style="font-size: 0.85em; color: #666; text-align: center">
+        <strong>Note:</strong> Init benchmarks are not representative of a real
+        cold start. They only measure parser/lexer construction logic and skip
+        the one-time <code>charCodeToOptimizedIdxMap</code> initialization
+        (~3ms) which is module-scoped and only runs on the very first Lexer
+        construction.
+      </p>
+    </div>
+
+    <script src="lib/iframe_loader.js"></script>
+    <script>
+      self.mode = "next";
+      var jsonNextFrame = includeTestIFrame(
+        "JSON",
+        "./parsers/json/json.html",
+        mode,
+      );
+      var cssNextFrame = includeTestIFrame(
+        "CSS",
+        "./parsers/css/css.html",
+        self.mode,
+      );
+      var ecma5NextFrame = includeTestIFrame(
+        "ECMA5",
+        "./parsers/ecma5/ecma5.html",
+        self.mode,
+      );
+
+      document.getElementById("JSON").addEventListener("load", function () {
+        var opts = this.contentWindow && this.contentWindow.globalOptions;
+        if (opts && opts.parserConfig) {
+          document.getElementById("options-info").textContent =
+            "outputCst: " + opts.parserConfig.outputCst;
+        }
+      });
+
+      var testCases = {
+        JSON: function (suite) {
+          addTest(suite, "JSON", jsonNextFrame.parse);
+        },
+
+        CSS: function (suite) {
+          addTest(suite, "CSS", cssNextFrame.parse);
+        },
+
+        ECMA5: function (suite) {
+          addTest(suite, "ECMA5", ecma5NextFrame.parse);
+        },
+      };
+    </script>
+    <script src="lib/bench_logic.js"></script>
+  </body>
+</html>

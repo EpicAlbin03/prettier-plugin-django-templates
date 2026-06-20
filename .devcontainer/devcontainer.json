@@ -1,0 +1,12 @@
+{
+  "name": "Chevrotain",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
+  "postCreateCommand": "bun install && bun run compile",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "workbench.startupEditor": "none"
+      }
+    }
+  }
+}
