@@ -100,10 +100,6 @@ const INLINE_STANDALONE_TAGS = new Set([
   // django-components
   "html_attrs",
 
-  // django-sekizai
-  "render_block",
-  "add_data",
-
   // django CMS
   "cms_admin_url",
   "page_attribute",
@@ -118,10 +114,6 @@ const INLINE_STANDALONE_TAGS = new Set([
   "render_plugin",
   "show_placeholder",
   "static_alias",
-
-  // django-crispy-forms
-  "crispy",
-  "crispy_field",
 
   // django-waffle
   "wafflejs",
@@ -153,6 +145,14 @@ const BLOCK_STANDALONE_TAGS = new Set([
 
   // django CMS
   "cms_toolbar",
+
+  // django-sekizai
+  "render_block",
+  "add_data",
+
+  // django-crispy-forms
+  "crispy",
+  "crispy_field",
 ]);
 
 export function isBranchTag(name: string): boolean {

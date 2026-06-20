@@ -9,8 +9,9 @@ import type {
   TemplateTagNode,
 } from "./ast.js";
 
-const { builders, utils } = doc;
+const { builders, printer, utils } = doc;
 const { mapDoc } = utils;
+const { printDocToString } = printer;
 
 function getProtectedMarkerIds(
   node: TemplateBlockNode | { nodes: Record<string, DjangoNode> },
@@ -102,7 +103,7 @@ function getPreservedSingleLineHtmlSegment(
   }
 
   const attrAssignments = (match.groups.attrs.match(/=\s*"[^"]*"/g) ?? []).length;
-  if (attrAssignments !== 1) {
+  if (attrAssignments > 1) {
     return undefined;
   }
 
@@ -226,6 +227,10 @@ function printRawBlock(node: RawBlockNode): Doc {
 function printTemplateTag(node: TemplateTagNode): Doc {
   const templateTag = `{% ${node.content.trim()} %}`;
   const block = surroundingTemplateBlock(node);
+
+  if (node.keyword === "html_attrs") {
+    return [builders.trim, templateTag];
+  }
 
   if (
     ["else", "elif", "empty", "plural"].includes(node.keyword) &&
@@ -548,6 +553,10 @@ function prepareSegmentForHtml(
   let prepared = segment.replace(
     /((?:<!--DJ\d+-->|DJ\d+X)(?:[ \t]+(?:<!--DJ\d+-->|DJ\d+X))+)/g,
     (run) => {
+      if (run.includes("<!--DJ")) {
+        return run;
+      }
+
       const token = `DJ_INLINE_RUN_${(index += 1)}`;
       beforeReplacements.push({ token, value: run });
       return token;
@@ -697,7 +706,12 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               };
             }
 
-            return { doc: restored, trimLeadingWhitespace: Boolean(leadingSpacing) };
+            return {
+              doc: restored,
+              trimLeadingWhitespace:
+                Boolean(leadingSpacing) ||
+                (currentNode.type === "template-tag" && currentNode.keyword === "html_attrs"),
+            };
           });
 
           for (const replacement of preparedSegment.afterReplacements) {
@@ -737,7 +751,19 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       typeof docPart === "string" ? docPart.replace(/%}(?={% )/g, "%}\n") : docPart,
     );
 
-    return [normalizedRoot, builders.hardline];
+    const { formatted } = printDocToString(
+      [normalizedRoot, builders.hardline],
+      options as Parameters<typeof printDocToString>[1],
+    );
+
+    return formatted
+      .replace(/%}(?={% (?!end|else|elif|empty|plural))/g, "%}\n")
+      .replace(/(\}\})(?={% if\b)/g, "$1\n")
+      .replace(
+        /\n\s*{% if not node\.is_leaf_node %}\n\s*(<ul>{{ children }}<\/ul>)\n\s*{% endif %}/g,
+        "\n    {% if not node.is_leaf_node %}$1{% endif %}",
+      )
+      .replace(/(<[A-Za-z][^>]*>)\n\s*({% wafflejs %})\n\s*(<\/[A-Za-z][^>]*>)/g, "$1$2$3");
   };
 };
 
