@@ -1,0 +1,34 @@
+{
+  "name": "@chevrotain/cst-dts-gen-test",
+  "version": "12.0.0",
+  "private": true,
+  "description": "tests for @chevrotain/cst-dts-gen",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/Chevrotain/chevrotain.git"
+  },
+  "scripts": {
+    "---------- CI FLOWS --------": "",
+    "ci": "bun run build test",
+    "build": "npm-run-all clean compile",
+    "test": "npm-run-all coverage",
+    "---------- DEV FLOWS --------": "",
+    "update-snapshots": "node ./scripts/update-snapshots.js",
+    "---------- BUILD STEPS --------": "",
+    "clean": "rimraf lib coverage",
+    "compile:watch": "tsc -w",
+    "compile": "tsc",
+    "coverage": "c8 mocha --enable-source-maps"
+  },
+  "dependencies": {
+    "@chevrotain/cst-dts-gen": "workspace:*",
+    "@chevrotain/gast": "workspace:*",
+    "@chevrotain/types": "workspace:*",
+    "chevrotain": "workspace:*"
+  },
+  "devDependencies": {
+    "glob": "13.0.6"
+  }
+}

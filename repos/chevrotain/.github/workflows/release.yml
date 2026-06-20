@@ -1,0 +1,31 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  id-token: write # Required for OIDC (npmjs trusted publishers)
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      # intentionally no caching for Turbo on **release** workflow, to ensure a **clean** build and publish
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build
+        run: bun run ci
+
+      - name: Publish to NPM
+        run: bun run release:publish
