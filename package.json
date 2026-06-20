@@ -63,13 +63,6 @@
   "peerDependencies": {
     "prettier": "^3.0.0"
   },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "11.8.0",
-      "onFail": "download"
-    }
-  },
   "engines": {
     "node": ">=22"
   },
