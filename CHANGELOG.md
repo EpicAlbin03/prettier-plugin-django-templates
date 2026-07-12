@@ -1,5 +1,49 @@
 # prettier-plugin-django-templates changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`9a15320`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/9a15320569385f3847e9135657405b6786e036ba) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Improve Django template formatting correctness, parser and printer performance, source locations, custom tag and ignore-region handling, marker safety, package compatibility, and release tooling.
+
+### Patch Changes
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`3f7ffef`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/3f7ffef14a2cedc9ac2bfefc1d472517178f4661) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - prevented line breaks between adjacent Django template blocks in HTML attributes
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`c59f5fd`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/c59f5fd54f8de313d8cd7435781953e16aad5c66) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - remove obsolete marker processing paths
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`9afe3cb`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/9afe3cb228488c9dc18eab824d1e4d35104f1aa2) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - fixed multiline django tags in html attributes from collapsing
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`e063265`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/e063265cfa1d37ef167a719a0eef198a8d95ec15) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Prevent internal parser and printer markers from colliding with template content, with exact and idempotent regression coverage.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`37949ee`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/37949ee97cb66fe3dc1c6ff3c51de13bc3bc132f) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Improve reproducible tooling, dependency hygiene, and contributor and support documentation.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`70960b6`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/70960b60c539e713d4f37a5e13d25ecb0ce1a435) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - format conditional start-tag attributes on separate lines
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`8c1137b`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/8c1137b34beae3cad746dd6a30351e2a154d06c1) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fix the CommonJS Node entry point and add packed-package smoke coverage for runtime, browser, declaration, and package-content contracts.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`e063265`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/e063265cfa1d37ef167a719a0eef198a8d95ec15) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Report immutable original-source spans for Django AST locations, with cursor, range, Unicode, nested-block, and malformed-input coverage.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`e063265`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/e063265cfa1d37ef167a719a0eef198a8d95ec15) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Allow unknown custom `end*` tags to remain standalone while preserving contextual custom block matching and strict known closing-tag errors.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`e063265`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/e063265cfa1d37ef167a719a0eef198a8d95ec15) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - replace application-specific output rewrites with generic document-flow docs
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`6af35e9`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/6af35e90b073d40185d24e2e3f59640af2b82f1f) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - preserve blank lines before html
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`e063265`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/e063265cfa1d37ef167a719a0eef198a8d95ec15) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Match named verbatim terminators using Django's exact-content lexer semantics, preserving nonmatching raw content and idempotence.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`e063265`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/e063265cfa1d37ef167a719a0eef198a8d95ec15) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Pair ignore-region delimiter styles so crossed or missing terminators preserve content through the correct boundary.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`184ac68`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/184ac6845659011755ecdc0e8cbb00f2169c0bb9) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Improve parser and printer scaling by assembling protected template segments once, indexing tag and marker relationships, and adding generated scale and benchmark coverage.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`37949ee`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/37949ee97cb66fe3dc1c6ff3c51de13bc3bc132f) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Strengthen CI and release validation with a reproducible packed-package release gate.
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`9afe3cb`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/9afe3cb228488c9dc18eab824d1e4d35104f1aa2) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - fixed expression line break issue
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`c59f5fd`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/c59f5fd54f8de313d8cd7435781953e16aad5c66) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - consolidate template tag metadata
+
+- [#15](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/15) [`c59f5fd`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/c59f5fd54f8de313d8cd7435781953e16aad5c66) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - unify html host context scanning
+
 ## 0.1.4
 
 ### Patch Changes
