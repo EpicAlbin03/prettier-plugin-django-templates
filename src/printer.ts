@@ -412,6 +412,56 @@ function joinSegments(
   return docs;
 }
 
+function splitStartTagAttributes(content: string): string[] {
+  const attributes: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | undefined;
+  let followsQuotedLineBreak = false;
+
+  for (const char of content.replace(/\r\n/g, "\n")) {
+    if (quote) {
+      if (char === "\n") {
+        current = `${current.trimEnd()} `;
+        followsQuotedLineBreak = true;
+        continue;
+      }
+
+      if (followsQuotedLineBreak && /[\t ]/.test(char)) {
+        continue;
+      }
+
+      followsQuotedLineBreak = false;
+      current += char;
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        attributes.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current) {
+    attributes.push(current);
+  }
+
+  return attributes;
+}
+
 function getStartTagTemplateBlockDoc(
   path: AstPath<DjangoNode>,
   print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
@@ -420,15 +470,10 @@ function getStartTagTemplateBlockDoc(
   const ids = getProtectedMarkerIds(block);
   const docs: Doc[] = [];
 
-  for (const originalLine of block.content.replace(/\r\n/g, "\n").split("\n")) {
-    const line = originalLine.trim();
-    if (!line) {
-      continue;
-    }
-
-    const lineNode = block.nodes[line];
-    if (lineNode?.type === "template-tag" && lineNode.role === "branch") {
-      docs.push(builders.dedent([builders.hardline, path.call(print, "nodes", line)]));
+  for (const attribute of splitStartTagAttributes(block.content)) {
+    const attributeNode = block.nodes[attribute];
+    if (attributeNode?.type === "template-tag" && attributeNode.role === "branch") {
+      docs.push(builders.dedent([builders.hardline, path.call(print, "nodes", attribute)]));
       continue;
     }
 
@@ -437,12 +482,12 @@ function getStartTagTemplateBlockDoc(
     }
 
     let cursor = 0;
-    while (cursor < line.length) {
+    while (cursor < attribute.length) {
       let matchedId: string | undefined;
-      let matchedIndex = line.length;
+      let matchedIndex = attribute.length;
 
       for (const id of ids) {
-        const index = line.indexOf(id, cursor);
+        const index = attribute.indexOf(id, cursor);
         if (index !== -1 && index < matchedIndex) {
           matchedId = id;
           matchedIndex = index;
@@ -450,12 +495,20 @@ function getStartTagTemplateBlockDoc(
       }
 
       if (!matchedId) {
-        docs.push(line.slice(cursor));
+        docs.push(
+          builders.join(
+            builders.hardline,
+            attribute
+              .slice(cursor)
+              .split("\n")
+              .map((line) => line.trim()),
+          ),
+        );
         break;
       }
 
       if (matchedIndex > cursor) {
-        docs.push(line.slice(cursor, matchedIndex));
+        docs.push(attribute.slice(cursor, matchedIndex));
       }
       docs.push(path.call(print, "nodes", matchedId));
       cursor = matchedIndex + matchedId.length;

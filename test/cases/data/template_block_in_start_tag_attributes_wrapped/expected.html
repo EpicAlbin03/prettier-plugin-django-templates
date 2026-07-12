@@ -1,0 +1,12 @@
+<tr
+  {% if forloop.last and page_obj.has_next and pagination_type == 'infinite' %}
+    hx-get="{{ htmx_url }}"
+    hx-vals='{"page": "{{ page_obj.next_page_number }}"}'
+    hx-trigger="intersect root:#main_card once"
+    hx-swap="afterend"
+    hx-target="this"
+    id="infinite_pagination"
+    hx-select="#table_body > *"
+    hx-include="#filter_form, #orderingInput, #search_form"
+  {% endif %}
+></tr>
