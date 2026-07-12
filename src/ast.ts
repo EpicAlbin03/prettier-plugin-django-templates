@@ -1,8 +1,3 @@
-export const ProtectedMarker = {
-  startToken: "#~",
-  endToken: "~#",
-};
-
 export type ProtectedMarkerKind = "inline" | "block" | "attr";
 
 export type DjangoNode =
@@ -20,16 +15,22 @@ export interface BaseNode {
   content: string;
   originalText: string;
   preNewLines: number;
-  index: number;
-  length: number;
-  nodes: Record<string, DjangoNode>;
+  readonly sourceStart: number;
+  readonly sourceEnd: number;
+  nodes?: Record<string, DjangoNode>;
   protectedMarkerKind: ProtectedMarkerKind;
+  parentBlockId?: string;
+  parentBlockRelationship?: "content" | "end";
+  parentBlockInTag?: boolean;
+  parentBlockInAttribute?: boolean;
+  parentBlockHasHtmlMarkup?: boolean;
   inTag?: boolean;
   inAttribute?: boolean;
 }
 
 export interface RootNode extends BaseNode {
   type: "root";
+  nodes: Record<string, DjangoNode>;
 }
 
 export interface ExpressionNode extends BaseNode {
@@ -44,8 +45,10 @@ export interface TemplateTagNode extends BaseNode {
 
 export interface TemplateBlockNode extends BaseNode {
   type: "template-block";
+  nodes: Record<string, DjangoNode>;
   start: TemplateTagNode;
   end: TemplateTagNode;
+  childIds: string[];
   containsNewLines: boolean;
 }
 
@@ -63,4 +66,5 @@ export interface RawBlockNode extends BaseNode {
 
 export interface IgnoreRegionNode extends BaseNode {
   type: "ignore-region";
+  closed: boolean;
 }

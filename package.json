@@ -24,11 +24,13 @@
     "dist"
   ],
   "type": "module",
-  "main": "dist/plugin.js",
+  "main": "dist/plugin.cjs",
   "exports": {
     ".": {
-      "types": "./dist/plugin.d.ts",
-      "default": "./dist/plugin.js"
+      "types": "./dist/plugin.d.cts",
+      "import": "./dist/plugin.cjs",
+      "require": "./dist/plugin.cjs",
+      "default": "./dist/plugin.cjs"
     },
     "./browser": "./dist/browser.mjs",
     "./package.json": "./package.json"
@@ -40,6 +42,9 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "test": "vp test",
+    "test:package": "node test/package-smoke.mjs",
+    "benchmark:performance": "vp run build && node --expose-gc scripts/benchmark-performance.mjs",
+    "validate:release": "vp run check && vp run test && vp run build && pnpm pack --dry-run && vp run test:package",
     "check": "vp check",
     "check:fix": "vp check --fix",
     "lint": "vp lint",

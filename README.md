@@ -34,9 +34,10 @@ The plugin provides the `django-html` parser for Django HTML templates in `.html
 }
 ```
 
-## Ignore sections
+## Ignore regions
 
-Using ignore regions is the best way to tell Prettier to leave part of a Django HTML template unchanged. Most of the time this is necessary for template tags inside embedded content such as `<script>` or `<style>` elements:
+
+Ignore regions tell the plugin to leave part of a Django HTML template unchanged:
 
 ```html
 <!-- prettier-ignore-start -->
@@ -70,7 +71,11 @@ Or using template comments:
 
 ## Usage in the browser
 
-Usage in the browser is semi-supported. Import `prettier-plugin-django-templates/browser` from an ESM-aware bundler to get a version that depends on `prettier/standalone` and does not use Node APIs. What isn't supported in a good way yet is using this without a build step, you still need a bundler like Vite to build everything together as one self-contained package in advance.
+Import `prettier-plugin-django-templates/browser` from an ESM-aware bundler to get an entry that depends on `prettier/standalone` and does not use Node APIs. The browser entry is intended for bundlers such as Vite. It is not a self-contained bundle and direct no-build CDN or script-tag usage is not supported.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, package validation, and changeset requirements.
 
 ## Credits
 

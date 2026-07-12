@@ -20,8 +20,10 @@ export default defineConfig({
       deps: {
         neverBundle: [externalPrettier],
       },
+      // The package root is intentionally CommonJS so Prettier can load it via
+      // either import() or require() in supported Node versions.
       outExtensions: () => ({
-        js: ".js",
+        js: ".cjs",
       }),
       outputOptions: {
         strict: true,

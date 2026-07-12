@@ -9,6 +9,7 @@ concurrency:
   # prevent two release workflows from running at once
   # race conditions here can result in releases failing
   group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 permissions: {}
 jobs:
@@ -21,6 +22,7 @@ jobs:
       pull-requests: write # to create pull request (changesets/action)
     name: Release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Repo
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -34,8 +36,8 @@ jobs:
           cache: true
       - name: Install
         run: vp install --frozen-lockfile
-      - name: Build
-        run: vp run build
+      - name: Validate release
+        run: vp run validate:release
       - name: Create Release Pull Request or Publish to npm
         id: changesets
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0

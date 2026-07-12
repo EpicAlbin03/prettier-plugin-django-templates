@@ -1,10 +1,11 @@
 minimumReleaseAge: 2880
 blockExoticSubdeps: true
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@latest
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.4
   vitest: 4.1.10
-  vite-plus: latest
+  vite-plus: 0.2.4
 overrides:
+  "read-yaml-file>js-yaml": 3.15.0
   vite: "catalog:"
   vitest: "catalog:"
 peerDependencyRules:

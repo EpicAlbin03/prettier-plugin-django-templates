@@ -1,0 +1,12 @@
+<select
+  id="hello"
+  name="hello"
+  multiple
+  hidden
+  {% if search_term %}
+    hx-swap-oob="beforeend"
+    hx-swap-oob-target="#hello"
+  {% else %}
+    hx-swap-oob="outerHTML"
+  {% endif %}
+></select>
