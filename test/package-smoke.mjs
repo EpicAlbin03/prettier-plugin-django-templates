@@ -124,7 +124,7 @@ void resolvedPlugin;
       "--ignore-scripts",
       `file:${tarballPath.replaceAll("\\", "/")}`,
       `prettier@${prettierVersion}`,
-      "typescript@latest",
+      "typescript@7.0.2",
     ],
     { cwd: temporaryDirectory },
   );

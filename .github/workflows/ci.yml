@@ -1,31 +1,57 @@
 name: CI
 
-on: pull_request
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    name: Test (Node ${{ matrix.node-version }})
+  validate:
+    name: Release validation (Node 22)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [22, 24]
-
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22
+          cache: true
+      - run: vp install --frozen-lockfile
+      - run: vp run validate:release
+
+  test-node-24:
+    name: Test (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
+        with:
+          node-version: 24
           cache: true
       - run: vp install --frozen-lockfile
       - run: vp test
 
-  test-prettier-latest:
-    name: Test (Prettier latest, Node ${{ matrix.node-version }})
+  prettier-compatibility:
+    name: Package (Prettier ${{ matrix.prettier-version }}, Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [22, 24]
-
+        include:
+          - node-version: 22
+            prettier-version: 3.0.0
+          - node-version: 24
+            prettier-version: ^3
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
@@ -33,38 +59,5 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: true
       - run: vp install --frozen-lockfile
-      - run: vp install prettier@^3
-      - run: vp test
-
-  test-prettier-earliest:
-    name: Test (Prettier 3.0.0, Node ${{ matrix.node-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [22, 24]
-
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: true
-      - run: vp install --frozen-lockfile
-      - run: vp install prettier@3.0.0
-      - run: vp test
-
-  lint:
-    name: Lint (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [22, 24]
-
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: true
-      - run: vp install --frozen-lockfile
-      - run: vp lint
+      - run: vp run test:package -- ${{ matrix.prettier-version }}
+      - run: git diff --exit-code -- package.json pnpm-lock.yaml
