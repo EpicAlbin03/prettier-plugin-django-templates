@@ -201,12 +201,69 @@ function printDocumentFlowNode(
   ];
 }
 
+function formatExpression(node: ExpressionNode): string {
+  return `{{ ${node.content.trim()} }}`;
+}
+
 function printExpression(node: ExpressionNode): Doc {
-  const expression = `{{ ${node.content.trim()} }}`;
+  const expression = formatExpression(node);
   if (node.preNewLines > 1) {
     return builders.group([builders.trim, builders.hardline, expression]);
   }
   return expression;
+}
+
+function getExpressionOnlyBlockDoc(block: TemplateBlockNode): Doc | undefined {
+  const lines = block.content.replace(/\r\n/g, "\n").split("\n");
+
+  while (lines[0] !== undefined && /^\s*$/.test(lines[0])) {
+    lines.shift();
+  }
+  while (lines.at(-1) !== undefined && /^\s*$/.test(lines.at(-1)!)) {
+    lines.pop();
+  }
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  const lineDocs: Doc[] = [];
+  let expressionCount = 0;
+
+  for (const line of lines) {
+    if (/^\s*$/.test(line)) {
+      lineDocs.push("");
+      continue;
+    }
+
+    const markerPattern = /DJ\d+X/g;
+    const markers = [...line.matchAll(markerPattern)];
+    if (markers.length === 0 || !/^\s*$/.test(line.replace(markerPattern, ""))) {
+      return undefined;
+    }
+
+    const lineDoc: Doc[] = [];
+    let cursor = 0;
+    for (const marker of markers) {
+      const id = marker[0];
+      const expression = block.nodes[id];
+      if (expression?.type !== "expression") {
+        return undefined;
+      }
+
+      lineDoc.push(line.slice(cursor, marker.index), formatExpression(expression));
+      cursor = marker.index + id.length;
+      expressionCount += 1;
+    }
+    lineDoc.push(line.slice(cursor).trimEnd());
+    lineDocs.push(lineDoc);
+  }
+
+  if (expressionCount < 2) {
+    return undefined;
+  }
+
+  return builders.join(builders.hardline, lineDocs);
 }
 
 function printRawBlock(node: RawBlockNode): Doc {
@@ -360,6 +417,7 @@ function buildBlock(
   print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
   block: TemplateBlockNode,
   mapped: Doc,
+  preserveMappedIndentation = false,
 ): Doc {
   if (/^\s*$/.test(block.content)) {
     return builders.group([
@@ -372,7 +430,9 @@ function buildBlock(
   if (!block.inTag && !block.inAttribute) {
     return builders.group([
       path.call(print, "nodes", block.start.id),
-      builders.indent([builders.hardline, mapped]),
+      preserveMappedIndentation
+        ? [builders.hardline, mapped]
+        : builders.indent([builders.hardline, mapped]),
       builders.hardline,
       path.call(print, "nodes", block.end.id),
     ]);
@@ -600,6 +660,13 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
     }
 
     const ids = getProtectedMarkerIds(node);
+    if (node.type === "template-block") {
+      const expressionOnlyBlockDoc = getExpressionOnlyBlockDoc(node);
+      if (expressionOnlyBlockDoc) {
+        return buildBlock(path, print, node, expressionOnlyBlockDoc, true);
+      }
+    }
+
     const leadingStandaloneSplit =
       node.type === "root" ? splitLeadingStandaloneBlockTag(node) : undefined;
     if (
