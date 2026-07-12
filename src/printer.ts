@@ -412,6 +412,59 @@ function joinSegments(
   return docs;
 }
 
+function getStartTagTemplateBlockDoc(
+  path: AstPath<DjangoNode>,
+  print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
+  block: TemplateBlockNode,
+): Doc {
+  const ids = getProtectedMarkerIds(block);
+  const docs: Doc[] = [];
+
+  for (const originalLine of block.content.replace(/\r\n/g, "\n").split("\n")) {
+    const line = originalLine.trim();
+    if (!line) {
+      continue;
+    }
+
+    const lineNode = block.nodes[line];
+    if (lineNode?.type === "template-tag" && lineNode.role === "branch") {
+      docs.push(builders.dedent([builders.hardline, path.call(print, "nodes", line)]));
+      continue;
+    }
+
+    if (docs.length > 0) {
+      docs.push(builders.hardline);
+    }
+
+    let cursor = 0;
+    while (cursor < line.length) {
+      let matchedId: string | undefined;
+      let matchedIndex = line.length;
+
+      for (const id of ids) {
+        const index = line.indexOf(id, cursor);
+        if (index !== -1 && index < matchedIndex) {
+          matchedId = id;
+          matchedIndex = index;
+        }
+      }
+
+      if (!matchedId) {
+        docs.push(line.slice(cursor));
+        break;
+      }
+
+      if (matchedIndex > cursor) {
+        docs.push(line.slice(cursor, matchedIndex));
+      }
+      docs.push(path.call(print, "nodes", matchedId));
+      cursor = matchedIndex + matchedId.length;
+    }
+  }
+
+  return docs;
+}
+
 function buildBlock(
   path: AstPath<DjangoNode>,
   print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
@@ -427,7 +480,7 @@ function buildBlock(
     ]);
   }
 
-  if (!block.inTag && !block.inAttribute) {
+  if (!block.inAttribute && (!block.inTag || block.containsNewLines)) {
     return builders.group([
       path.call(print, "nodes", block.start.id),
       preserveMappedIndentation
@@ -664,6 +717,10 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       const expressionOnlyBlockDoc = getExpressionOnlyBlockDoc(node);
       if (expressionOnlyBlockDoc) {
         return buildBlock(path, print, node, expressionOnlyBlockDoc, true);
+      }
+
+      if (node.inTag && !node.inAttribute && node.containsNewLines) {
+        return buildBlock(path, print, node, getStartTagTemplateBlockDoc(path, print, node));
       }
     }
 
