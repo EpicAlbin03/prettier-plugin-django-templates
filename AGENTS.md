@@ -1,6 +1,6 @@
 # General Rules
 
-- Always suggest a changeset summary for the changes implemented. It should be concise, descriptive, and lowercase. It should also be applicable as a commit message.
+- If changes have been made, suggest a changeset summary for the changes implemented. It should be concise, descriptive, and lowercase. It should also be applicable as a commit message.
 
 <!--VITE PLUS START-->
 

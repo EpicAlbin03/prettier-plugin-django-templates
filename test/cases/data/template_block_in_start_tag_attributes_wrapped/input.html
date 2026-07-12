@@ -1,6 +1,6 @@
 <tr
-        {% if forloop.last and page_obj.has_next and pagination_type == 'infinite' %}hx-get="{{ htmx_url }}"
-        hx-vals='{"page": "{{ page_obj.next_page_number }}"}' hx-trigger="intersect root:#main_card
-        once" hx-swap="afterend" hx-target="this" id="infinite_pagination" hx-select="#table_body >
-        *" hx-include="#filter_form, #orderingInput, #search_form"{% endif %}
+        {% if row_cycle.final and cursor_state.can_continue and display_mode == 'cascade' %}hx-get="{{ fragment_endpoint }}"
+        hx-vals='{"token": "{{ cursor_state.next_token }}"}' hx-trigger="revealed root:#result_shell delay:37ms"
+        hx-swap="beforebegin" hx-target="closest tbody" id="continuation_marker" hx-select="#result_stream > article"
+        hx-include="#facet_panel, #sort_control, #query_box"{% endif %}
     >

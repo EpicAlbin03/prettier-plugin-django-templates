@@ -416,21 +416,9 @@ function splitStartTagAttributes(content: string): string[] {
   const attributes: string[] = [];
   let current = "";
   let quote: '"' | "'" | undefined;
-  let followsQuotedLineBreak = false;
 
   for (const char of content.replace(/\r\n/g, "\n")) {
     if (quote) {
-      if (char === "\n") {
-        current = `${current.trimEnd()} `;
-        followsQuotedLineBreak = true;
-        continue;
-      }
-
-      if (followsQuotedLineBreak && /[\t ]/.test(char)) {
-        continue;
-      }
-
-      followsQuotedLineBreak = false;
       current += char;
       if (char === quote) {
         quote = undefined;
@@ -495,15 +483,7 @@ function getStartTagTemplateBlockDoc(
       }
 
       if (!matchedId) {
-        docs.push(
-          builders.join(
-            builders.hardline,
-            attribute
-              .slice(cursor)
-              .split("\n")
-              .map((line) => line.trim()),
-          ),
-        );
+        docs.push(attribute.slice(cursor));
         break;
       }
 
