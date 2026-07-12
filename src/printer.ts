@@ -634,6 +634,37 @@ function restoreInlineProtectedMarkerRuns(
   return restored;
 }
 
+function normalizeAdjacentDocumentFlowConstructs(value: string): string {
+  const inAttributeValue = Array.from<boolean>({ length: value.length }).fill(false);
+  let quote: '"' | "'" | undefined;
+  let inTag = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    inAttributeValue[index] = quote !== undefined;
+    const char = value[index];
+
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (char === "<" && /[A-Za-z!/]/.test(value[index + 1] ?? "")) {
+      inTag = true;
+    } else if (char === ">") {
+      inTag = false;
+    } else if ((char === '"' || char === "'") && inTag) {
+      quote = char;
+    }
+  }
+
+  return value.replace(
+    /%}(?={% (?!end|else|elif|empty|plural))|\}\}(?={% if\b)/g,
+    (boundary, offset: number) => (inAttributeValue[offset] ? boundary : `${boundary}\n`),
+  );
+}
+
 function normalizeHtmlAroundProtectedMarkers(currentDoc: string): string {
   return currentDoc
     .replace(/(<[^/!][^<>]*?)\s*\n\s*>/g, "$1>")
@@ -871,18 +902,12 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       return buildBlock(path, print, node, joined);
     }
 
-    const normalizedRoot = mapDoc(joined, (docPart) =>
-      typeof docPart === "string" ? docPart.replace(/%}(?={% )/g, "%}\n") : docPart,
-    );
-
     const { formatted } = printDocToString(
-      [normalizedRoot, builders.hardline],
+      [joined, builders.hardline],
       options as Parameters<typeof printDocToString>[1],
     );
 
-    return formatted
-      .replace(/%}(?={% (?!end|else|elif|empty|plural))/g, "%}\n")
-      .replace(/(\}\})(?={% if\b)/g, "$1\n")
+    return normalizeAdjacentDocumentFlowConstructs(formatted)
       .replace(
         /\n\s*{% if not node\.is_leaf_node %}\n\s*(<ul>{{ children }}<\/ul>)\n(?<indent>[ \t]*){% endif %}/g,
         "\n$<indent>{% if not node.is_leaf_node %}$1{% endif %}",
