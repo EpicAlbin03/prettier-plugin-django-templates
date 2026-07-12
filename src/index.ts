@@ -18,8 +18,8 @@ const parsers = {
   [PLUGIN_KEY]: {
     astFormat: PLUGIN_KEY,
     parse,
-    locStart: (node) => node.index,
-    locEnd: (node) => node.index + node.length,
+    locStart: (node) => node.sourceStart,
+    locEnd: (node) => node.sourceEnd,
   } as Parser<DjangoNode>,
 };
 

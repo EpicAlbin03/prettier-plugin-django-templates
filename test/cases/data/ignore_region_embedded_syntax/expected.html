@@ -1,0 +1,9 @@
+<article>
+  <h2>Before</h2>
+  <!-- prettier-ignore-start -->
+<script>if (value<3) { const markup = `<div>{{ raw}}</div>`;console.log(markup); }</script>
+<style>.item::before{content:"{% if x %} raw {% endif %}";color:red}</style>
+<template><section   data-x="{% url 'x' %}">{{value }}</section></template>
+<!-- prettier-ignore-end -->
+  <p>After</p>
+</article>

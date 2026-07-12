@@ -1,12 +1,6 @@
 import type { Parser } from "prettier";
-import {
-  getTagRole,
-  isBlockStandaloneTag,
-  isBranchTag,
-  isEndTag,
-  isInlineStandaloneTag,
-  isRawTag,
-} from "./tags.js";
+import { InternalMarkerAllocator } from "./internal-markers.js";
+import { getTagRole, isBlockStandaloneTag, isInlineStandaloneTag, isRawTag } from "./tags.js";
 import type {
   TemplateBlockNode,
   CommentNode,
@@ -47,6 +41,7 @@ interface CommentToken extends TokenBase {
 
 interface IgnoreBlockToken extends TokenBase {
   type: "IgnoreBlock";
+  closed: boolean;
 }
 
 interface TagToken extends TokenBase {
@@ -60,14 +55,27 @@ interface RawBlockToken extends TokenBase {
   type: "RawBlock";
   name: string;
   args: string;
-  body: string;
-  endArgs: string;
+  body?: string;
+  endArgs?: string;
 }
 
 type Token = TextToken | VariableToken | CommentToken | IgnoreBlockToken | TagToken | RawBlockToken;
 
-const IGNORE_BLOCK_STARTS = ["<!-- prettier-ignore-start -->", "{# prettier-ignore-start #}"];
-const IGNORE_BLOCK_ENDS = ["<!-- prettier-ignore-end -->", "{# prettier-ignore-end #}"];
+interface IgnoreDelimiterPair {
+  opener: string;
+  closer: string;
+}
+
+const IGNORE_BLOCK_DELIMITERS: readonly IgnoreDelimiterPair[] = [
+  {
+    opener: "<!-- prettier-ignore-start -->",
+    closer: "<!-- prettier-ignore-end -->",
+  },
+  {
+    opener: "{# prettier-ignore-start #}",
+    closer: "{# prettier-ignore-end #}",
+  },
+];
 
 function readUntil(text: string, start: number, endToken: string, errorMessage?: string): number {
   const end = text.indexOf(endToken, start);
@@ -219,7 +227,10 @@ function findRawBlockEnd(
   text: string,
   from: number,
   name: string,
+  openingContent: string,
 ): { end: number; closingStart: number; endArgs: string } | null {
+  // Django's lexer ends verbatim only when the complete stripped tag content matches.
+  const expectedClosingContent = `end${openingContent}`;
   const endName = `end${name}`;
   let cursor = from;
 
@@ -236,8 +247,10 @@ function findRawBlockEnd(
 
     const tagContent = text.slice(tagStart + 2, closeDelimiter).trim();
     const [tagName, ...rest] = tagContent.split(/\s+/);
+    const isMatchingEnd =
+      name === "verbatim" ? tagContent === expectedClosingContent : tagName === endName;
 
-    if (tagName === endName) {
+    if (isMatchingEnd) {
       return {
         end: closeDelimiter + 2,
         closingStart: tagStart,
@@ -251,18 +264,15 @@ function findRawBlockEnd(
   return null;
 }
 
-function findIgnoreBlockEnd(text: string, from: number): number {
-  const ends = IGNORE_BLOCK_ENDS.map((marker) => text.indexOf(marker, from)).filter(
-    (index) => index !== -1,
-  );
-
-  if (ends.length === 0) {
-    return text.length;
-  }
-
-  const start = Math.min(...ends);
-  const marker = IGNORE_BLOCK_ENDS.find((candidate) => text.startsWith(candidate, start));
-  return marker ? start + marker.length : text.length;
+function findIgnoreBlockEnd(
+  text: string,
+  from: number,
+  delimiter: IgnoreDelimiterPair,
+): { end: number; closed: boolean } {
+  const closerStart = text.indexOf(delimiter.closer, from);
+  return closerStart === -1
+    ? { end: text.length, closed: false }
+    : { end: closerStart + delimiter.closer.length, closed: true };
 }
 
 function tokenize(text: string): Token[] {
@@ -273,9 +283,15 @@ function tokenize(text: string): Token[] {
   while (cursor < text.length) {
     const tokenState = state[cursor] ?? { inAttribute: false, inTag: false };
 
-    const ignoreStart = IGNORE_BLOCK_STARTS.find((marker) => text.startsWith(marker, cursor));
-    if (ignoreStart) {
-      const end = findIgnoreBlockEnd(text, cursor + ignoreStart.length);
+    const ignoreDelimiter = IGNORE_BLOCK_DELIMITERS.find(({ opener }) =>
+      text.startsWith(opener, cursor),
+    );
+    if (ignoreDelimiter) {
+      const { end, closed } = findIgnoreBlockEnd(
+        text,
+        cursor + ignoreDelimiter.opener.length,
+        ignoreDelimiter,
+      );
       const raw = text.slice(cursor, end);
       tokens.push({
         type: "IgnoreBlock",
@@ -285,6 +301,7 @@ function tokenize(text: string): Token[] {
         end,
         inAttribute: tokenState.inAttribute,
         inTag: tokenState.inTag,
+        closed,
       });
       cursor = end;
       continue;
@@ -351,7 +368,8 @@ function tokenize(text: string): Token[] {
       const tag = createTagToken(raw, cursor, end, tokenState);
 
       if (isRawTag(tag.name) && !tag.inTag && !tag.inAttribute) {
-        const blockEndInfo = findRawBlockEnd(text, end, tag.name);
+        const openingContent = raw.slice(2, -2).trim();
+        const blockEndInfo = findRawBlockEnd(text, end, tag.name, openingContent);
         if (blockEndInfo) {
           const blockRaw = text.slice(cursor, blockEndInfo.end);
           tokens.push({
@@ -368,6 +386,23 @@ function tokenize(text: string): Token[] {
             inTag: tokenState.inTag,
           });
           cursor = blockEndInfo.end;
+          continue;
+        }
+
+        if (tag.name === "verbatim" && tag.args) {
+          // Django's lexer remains in named verbatim mode through EOF without an exact terminator.
+          tokens.push({
+            type: "RawBlock",
+            raw: text.slice(cursor),
+            content: tag.content,
+            name: tag.name,
+            args: tag.args,
+            start: cursor,
+            end: text.length,
+            inAttribute: tokenState.inAttribute,
+            inTag: tokenState.inTag,
+          });
+          cursor = text.length;
           continue;
         }
       }
@@ -397,18 +432,6 @@ function countPreNewLines(text: string, to: number): number {
   }
 
   return segment.split("\n").length - 1;
-}
-
-function createProtectedMarker(id: number, kind: ProtectedMarkerKind): string {
-  if (kind === "block") {
-    return `<!--DJ${id}-->`;
-  }
-
-  if (kind === "attr") {
-    return `dj${id}=""`;
-  }
-
-  return `DJ${id}X`;
 }
 
 function replaceAt(text: string, replacement: string, start: number, length: number): string {
@@ -533,24 +556,19 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
     content: text,
     originalText: text,
     preNewLines: 0,
-    index: 0,
-    length: text.length,
+    sourceStart: 0,
+    sourceEnd: text.length,
     nodes,
     protectedMarkerKind: "block",
   };
 
-  let nextId = 0;
+  const markerAllocator = new InternalMarkerAllocator(text);
+  const protectedSpans = new Map<string, { start: number; length: number }>();
   let delta = 0;
   const stack: TemplateTagNode[] = [];
 
-  const createId = (token: Token, forceBlock = false) => {
-    while (true) {
-      const id = createProtectedMarker(nextId++, protectedMarkerKindForToken(token, forceBlock));
-      if (!text.includes(id)) {
-        return id;
-      }
-    }
-  };
+  const createId = (token: Token, forceBlock = false) =>
+    markerAllocator.allocate(protectedMarkerKindForToken(token, forceBlock));
 
   for (const [tokenIndex, token] of tokens.entries()) {
     const currentIndex = token.start + delta;
@@ -572,8 +590,8 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         content: token.content,
         originalText: normalizeRaw(token),
         preNewLines,
-        index: currentIndex,
-        length: token.raw.length,
+        sourceStart: token.start,
+        sourceEnd: token.end,
         nodes,
         protectedMarkerKind: protectedMarkerKindForToken(token),
         inTag: token.inTag,
@@ -593,8 +611,8 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         content: token.content,
         originalText: normalizeRaw(token),
         preNewLines,
-        index: currentIndex,
-        length: token.raw.length,
+        sourceStart: token.start,
+        sourceEnd: token.end,
         nodes,
         protectedMarkerKind: protectedMarkerKindForToken(token),
         inTag: token.inTag,
@@ -614,12 +632,13 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         content: token.raw,
         originalText: token.raw,
         preNewLines,
-        index: currentIndex,
-        length: token.raw.length,
+        sourceStart: token.start,
+        sourceEnd: token.end,
         nodes,
         protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
         inTag: token.inTag,
         inAttribute: token.inAttribute,
+        closed: token.closed,
       };
       nodes[id] = node;
       root.content = replaceAt(root.content, id, currentIndex, token.raw.length);
@@ -635,8 +654,8 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         content: token.raw,
         originalText: token.raw,
         preNewLines,
-        index: currentIndex,
-        length: token.raw.length,
+        sourceStart: token.start,
+        sourceEnd: token.end,
         nodes,
         protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
         inTag: token.inTag,
@@ -657,8 +676,8 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       content: token.content,
       originalText: normalizeRaw(token),
       preNewLines,
-      index: currentIndex,
-      length: token.raw.length,
+      sourceStart: token.start,
+      sourceEnd: token.end,
       nodes,
       keyword: token.name,
       role: token.role,
@@ -666,6 +685,7 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       inTag: token.inTag,
       inAttribute: token.inAttribute,
     } as const;
+    protectedSpans.set(templateTagBase.id, { start: currentIndex, length: token.raw.length });
 
     if (token.role === "branch") {
       if (!hasMatchingBranchParent(token, stack)) {
@@ -682,7 +702,11 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
     }
 
     if (actsAsEndTag(token, stack)) {
-      const endNode: TemplateTagNode = { type: "template-tag", ...templateTagBase };
+      const endNode: TemplateTagNode = {
+        type: "template-tag",
+        ...templateTagBase,
+        role: "end",
+      };
       nodes[endNode.id] = endNode;
 
       let matchIndex = NOT_FOUND;
@@ -705,19 +729,22 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       }
 
       const startNode = stack.pop()!;
-      const blockText = root.content.slice(startNode.index, currentIndex + token.raw.length);
-      const blockId = createProtectedMarker(
-        nextId++,
+      const startProtectedSpan = protectedSpans.get(startNode.id)!;
+      const blockText = root.content.slice(
+        startProtectedSpan.start,
+        currentIndex + token.raw.length,
+      );
+      const blockId = markerAllocator.allocate(
         protectedMarkerKindForToken(token, !startNode.inTag && !startNode.inAttribute),
       );
       const blockNode: TemplateBlockNode = {
         type: "template-block",
         id: blockId,
-        content: blockText.slice(startNode.length, blockText.length - token.raw.length),
+        content: blockText.slice(startProtectedSpan.length, blockText.length - token.raw.length),
         originalText: blockText,
         preNewLines: startNode.preNewLines,
-        index: startNode.index,
-        length: blockText.length,
+        sourceStart: startNode.sourceStart,
+        sourceEnd: token.end,
         nodes,
         protectedMarkerKind: startNode.inTag || startNode.inAttribute ? "inline" : "block",
         start: startNode,
@@ -727,20 +754,16 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         inAttribute: startNode.inAttribute,
       };
       nodes[blockId] = blockNode;
-      root.content = replaceAt(root.content, blockId, startNode.index, blockText.length);
+      root.content = replaceAt(root.content, blockId, startProtectedSpan.start, blockText.length);
       delta += blockId.length - blockText.length;
       continue;
     }
 
-    if (token.role === "end") {
-      throw new Error(`No start tag found for template end tag "${templateTagBase.originalText}".`);
-    }
-
-    if (token.role === "standalone" && !isBranchTag(token.name) && !isEndTag(token.name)) {
+    if (token.role === "standalone") {
       const node: TemplateTagNode = { type: "template-tag", ...templateTagBase };
       nodes[node.id] = node;
 
-      if (!shouldInlineStandalone(token) && hasMatchingEnd(tokens, tokenIndex, token.name)) {
+      if (hasMatchingEnd(tokens, tokenIndex, token.name)) {
         stack.push(node);
         continue;
       }
@@ -755,8 +778,10 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
     stack.push(node);
   }
 
-  for (const node of stack) {
-    root.content = replaceAt(root.content, node.id, node.index, node.length);
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    const node = stack[index];
+    const protectedSpan = protectedSpans.get(node.id)!;
+    root.content = replaceAt(root.content, node.id, protectedSpan.start, protectedSpan.length);
   }
 
   return root;

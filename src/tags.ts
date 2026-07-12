@@ -77,6 +77,56 @@ const RAW_TAGS = new Set([
   "comment",
 ]);
 
+// Known closing tags are explicit so unknown custom names beginning with `end`
+// can remain standalone unless they match an open custom block.
+const END_TAGS = new Set([
+  // django
+  "endif",
+  "endfor",
+  "endblock",
+  "endfilter",
+  "endwith",
+  "endautoescape",
+  "endifchanged",
+  "endspaceless",
+  "endblocktranslate",
+  "endcache",
+  "endlocalize",
+  "endlocaltime",
+  "endtimezone",
+  "endlanguage",
+  "endverbatim",
+  "endcomment",
+  "endpartialdef",
+
+  // deprecated
+  "endifequal",
+  "endifnotequal",
+  "endblocktrans",
+
+  // supported third-party tags
+  "endthumbnail",
+  "endcomponent",
+  "endcomponent_block",
+  "endfill",
+  "endslot",
+  "endprovide",
+  "endcompress",
+  "endaddtoblock",
+  "endwith_data",
+  "endflag",
+  "endswitch",
+  "endsample",
+  "endrecursetree",
+  "endplaceholder",
+  "endstatic_placeholder",
+  "endrender_model_block",
+  "endrender_model_add_block",
+  "endrender_plugin_block",
+  "endelement",
+  "endcrispy_addon",
+]);
+
 const INLINE_STANDALONE_TAGS = new Set([
   // django
   "cycle",
@@ -163,8 +213,8 @@ export function isRawTag(name: string): boolean {
   return RAW_TAGS.has(name);
 }
 
-export function isEndTag(name: string): boolean {
-  return name.startsWith("end");
+export function isKnownEndTag(name: string): boolean {
+  return END_TAGS.has(name);
 }
 
 export function isStartTag(name: string): boolean {
@@ -184,7 +234,7 @@ export function getTagRole(name: string): "start" | "branch" | "end" | "standalo
     return "branch";
   }
 
-  if (isEndTag(name)) {
+  if (isKnownEndTag(name)) {
     return "end";
   }
 

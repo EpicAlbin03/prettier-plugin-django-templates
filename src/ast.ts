@@ -20,8 +20,8 @@ export interface BaseNode {
   content: string;
   originalText: string;
   preNewLines: number;
-  index: number;
-  length: number;
+  readonly sourceStart: number;
+  readonly sourceEnd: number;
   nodes: Record<string, DjangoNode>;
   protectedMarkerKind: ProtectedMarkerKind;
   inTag?: boolean;
@@ -63,4 +63,5 @@ export interface RawBlockNode extends BaseNode {
 
 export interface IgnoreRegionNode extends BaseNode {
   type: "ignore-region";
+  closed: boolean;
 }

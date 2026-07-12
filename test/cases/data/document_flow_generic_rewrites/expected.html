@@ -1,0 +1,26 @@
+<section>{% custom_asset %}</section>
+<aside>{% custom_payload item %}</aside>
+<div>
+  {% custom_asset %}
+</div>
+<p>
+  before
+  {% custom_asset %}
+  after
+</p>
+<ul>
+  <li>
+    {{ label }}
+    {% if show_children %}<ol>{{ descendants }}</ol>{% endif %}
+  </li>
+</ul>
+<ul>
+  <li>
+    {{ title }}
+    {% if expanded %}
+      <ol>
+        {{ items }}
+      </ol>
+    {% endif %}
+  </li>
+</ul>
