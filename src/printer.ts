@@ -383,6 +383,11 @@ function splitLeadingStandaloneBlockTag(
   return [firstId, trimmedRest];
 }
 
+function hasLeadingBlankLine(segment: string): boolean {
+  const leadingWhitespace = segment.match(/^\s*/)?.[0] ?? "";
+  return (leadingWhitespace.match(/\n/g) ?? []).length > 1;
+}
+
 function joinSegments(
   node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
   segments: string[],
@@ -400,12 +405,15 @@ function joinSegments(
 
     docs.push(mapped[index]);
 
+    const nextSegment = segments[index + 1];
     if (
       isStandaloneDocumentFlowTemplateTag(node, segment) &&
-      (segmentHasRenderableText(node, segments[index + 1]) ||
-        isTemplateBlockSegment(node, segments[index + 1]))
+      (segmentHasRenderableText(node, nextSegment) || isTemplateBlockSegment(node, nextSegment))
     ) {
       docs.push(builders.hardline);
+      if (segmentHasRenderableText(node, nextSegment) && hasLeadingBlankLine(nextSegment)) {
+        docs.push(builders.hardline);
+      }
     }
   }
 
