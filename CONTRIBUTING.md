@@ -34,6 +34,16 @@ vp run test:package
 vp run test:package -- 3.0.0
 ```
 
+## Performance benchmarks
+
+Run the parser and formatter scale matrix separately from the correctness suite:
+
+```bash
+vp run benchmark:performance
+```
+
+The benchmark warms each case once and reports median elapsed time and advisory RSS deltas for 1k, 2k, 4k, 8k, and 16k constructs. Use `BENCHMARK_MAX=2000` or `BENCHMARK_SAMPLES=3` for a shorter local run. Compare results only when using the same Node version, sample count, and inputs.
+
 ## Tests and fixtures
 
 Focused behavior tests live in `test/*.ts`. End-to-end fixtures live in `test/cases/data/<case-name>/` and contain:

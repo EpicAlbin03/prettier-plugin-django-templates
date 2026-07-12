@@ -17,14 +17,20 @@ export interface BaseNode {
   preNewLines: number;
   readonly sourceStart: number;
   readonly sourceEnd: number;
-  nodes: Record<string, DjangoNode>;
+  nodes?: Record<string, DjangoNode>;
   protectedMarkerKind: ProtectedMarkerKind;
+  parentBlockId?: string;
+  parentBlockRelationship?: "content" | "end";
+  parentBlockInTag?: boolean;
+  parentBlockInAttribute?: boolean;
+  parentBlockHasHtmlMarkup?: boolean;
   inTag?: boolean;
   inAttribute?: boolean;
 }
 
 export interface RootNode extends BaseNode {
   type: "root";
+  nodes: Record<string, DjangoNode>;
 }
 
 export interface ExpressionNode extends BaseNode {
@@ -39,8 +45,10 @@ export interface TemplateTagNode extends BaseNode {
 
 export interface TemplateBlockNode extends BaseNode {
   type: "template-block";
+  nodes: Record<string, DjangoNode>;
   start: TemplateTagNode;
   end: TemplateTagNode;
+  childIds: string[];
   containsNewLines: boolean;
 }
 

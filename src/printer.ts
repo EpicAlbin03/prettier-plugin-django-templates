@@ -2,6 +2,7 @@ import type { AstPath, Doc, Options, Printer } from "prettier";
 import { doc } from "prettier";
 import { scanHtmlHostContexts } from "./html-host-context.js";
 import {
+  ANY_MARKER_SOURCE,
   ATTRIBUTE_MARKER_SOURCE,
   BLOCK_MARKER_SOURCE,
   containsBlockMarker,
@@ -30,14 +31,37 @@ const { mapDoc } = utils;
 const { printDocToString } = printer;
 
 function getProtectedMarkerIds(
-  node: TemplateBlockNode | { nodes: Record<string, DjangoNode> },
+  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
 ): string[] {
-  return Object.keys(node.nodes).sort((left, right) => right.length - left.length);
+  if ("childIds" in node) {
+    return node.childIds;
+  }
+
+  return [...node.content.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))]
+    .map((match) => match[0])
+    .filter((id) => Boolean(node.nodes[id]));
+}
+
+function markerEntries(
+  value: string,
+  nodes: Record<string, DjangoNode>,
+): Array<{ id: string; index: number }> {
+  const entries: Array<{ id: string; index: number }> = [];
+  for (const match of value.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))) {
+    if (nodes[match[0]]) {
+      entries.push({ id: match[0], index: match.index });
+    }
+  }
+  return entries;
+}
+
+function containsProtectedNodeMarker(value: string, nodes: Record<string, DjangoNode>): boolean {
+  return markerEntries(value, nodes).length > 0;
 }
 
 function replaceProtectedMarkersInString(
   currentDoc: string,
-  ids: string[],
+  nodes: Record<string, DjangoNode>,
   render: (
     id: string,
     context: {
@@ -52,23 +76,7 @@ function replaceProtectedMarkersInString(
   let cursor = 0;
   let trimFollowingWhitespace = false;
 
-  while (cursor < currentDoc.length) {
-    let matchedId: string | undefined;
-    let matchedIndex = currentDoc.length;
-
-    for (const id of ids) {
-      const index = currentDoc.indexOf(id, cursor);
-      if (index !== -1 && index < matchedIndex) {
-        matchedId = id;
-        matchedIndex = index;
-      }
-    }
-
-    if (!matchedId) {
-      parts.push(currentDoc.slice(cursor));
-      break;
-    }
-
+  for (const { id: matchedId, index: matchedIndex } of markerEntries(currentDoc, nodes)) {
     const lineStart = currentDoc.lastIndexOf("\n", matchedIndex - 1) + 1;
     const nextNewline = currentDoc.indexOf("\n", matchedIndex + matchedId.length);
     const lineEnd = nextNewline === -1 ? currentDoc.length : nextNewline;
@@ -97,6 +105,9 @@ function replaceProtectedMarkersInString(
     cursor = matchedIndex + matchedId.length;
   }
 
+  if (cursor < currentDoc.length) {
+    parts.push(currentDoc.slice(cursor));
+  }
   return parts;
 }
 
@@ -128,9 +139,7 @@ function getPreservedSingleLineHtmlSegment(
     return undefined;
   }
 
-  const segmentNodes = Object.values(node.nodes).filter((entry) =>
-    trimmedSegment.includes(entry.id),
-  );
+  const segmentNodes = markerEntries(trimmedSegment, node.nodes).map(({ id }) => node.nodes[id]);
   return segmentNodes.every((entry) => entry.protectedMarkerKind === "inline")
     ? trimmedSegment
     : undefined;
@@ -327,7 +336,8 @@ function splitAtTemplateTags(
   node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
 ): string[] {
   const splitStandaloneTemplateTags = !hasHtmlMarkup(node.content);
-  const splitters = Object.values(node.nodes)
+  const splitters = markerEntries(node.content, node.nodes)
+    .map(({ id }) => node.nodes[id])
     .filter(
       (entry): entry is TemplateTagNode =>
         entry.type === "template-tag" &&
@@ -337,8 +347,7 @@ function splitAtTemplateTags(
           ((splitStandaloneTemplateTags || node.content.startsWith(entry.id)) &&
             entry.role === "standalone" &&
             entry.protectedMarkerKind === "block")),
-    )
-    .filter((entry) => node.content.includes(entry.id));
+    );
 
   if (splitters.length === 0) {
     return [node.content];
@@ -348,21 +357,6 @@ function splitAtTemplateTags(
     `(${splitters.map((entry) => escapeMarkerForRegExp(entry.id)).join("|")})`,
   );
   return node.content.split(pattern).filter(Boolean);
-}
-
-function surroundingTemplateBlock(node: DjangoNode): TemplateBlockNode | undefined {
-  return Object.values(node.nodes).find(
-    (entry): entry is TemplateBlockNode =>
-      entry.type === "template-block" && entry.content.includes(node.id),
-  );
-}
-
-function parentTemplateBlock(node: DjangoNode): TemplateBlockNode | undefined {
-  return Object.values(node.nodes).find(
-    (entry): entry is TemplateBlockNode =>
-      entry.type === "template-block" &&
-      (entry.content.includes(node.id) || entry.end.id === node.id),
-  );
 }
 
 function stripProtectedMarkerContext(value: string): string {
@@ -497,21 +491,25 @@ function printRawBlock(node: RawBlockNode): Doc {
 
 function printTemplateTag(node: TemplateTagNode): Doc {
   const templateTag = `{% ${node.content.trim()} %}`;
-  const block = surroundingTemplateBlock(node);
 
   if (getStartTagFormatting(node.keyword) === "trim-leading") {
     return [builders.trim, templateTag];
   }
 
-  if (isBranchTag(node.keyword) && block && !block.inTag && !block.inAttribute) {
+  if (
+    isBranchTag(node.keyword) &&
+    node.parentBlockRelationship === "content" &&
+    !node.parentBlockInTag &&
+    !node.parentBlockInAttribute
+  ) {
     return [builders.dedent(builders.hardline), templateTag, builders.hardline];
   }
 
   if (node.preNewLines > 1) {
-    const block = parentTemplateBlock(node);
+    const hasParentBlock = node.parentBlockRelationship !== undefined;
     const standaloneNeedsSpacing =
       node.role === "standalone" &&
-      (node.protectedMarkerKind !== "block" || !block || !hasHtmlMarkup(block.content));
+      (node.protectedMarkerKind !== "block" || !hasParentBlock || !node.parentBlockHasHtmlMarkup);
     if (standaloneNeedsSpacing) {
       return builders.group([builders.trim, builders.hardline, templateTag]);
     }
@@ -547,46 +545,30 @@ function getWhitespaceSensitiveInlineElementDoc(
     return undefined;
   }
 
-  const ids = getProtectedMarkerIds(node);
-  const unsafeBlockIds = ids.filter((id) => {
+  const entries = markerEntries(preserved, node.nodes);
+  const hasUnsafeBlock = entries.some(({ id, index }) => {
     const child = node.nodes[id];
-    const markerIndex = preserved.indexOf(id);
-    const followingContent = preserved.slice(markerIndex + id.length);
+    const followingIndex = index + id.length;
     return (
       child?.type === "template-block" &&
-      markerIndex !== -1 &&
       !hasSafeSingleBlockElementBody(child) &&
-      /^\S/.test(followingContent) &&
-      !followingContent.startsWith("</")
+      /\S/.test(preserved[followingIndex] ?? "") &&
+      !preserved.startsWith("</", followingIndex)
     );
   });
-  if (unsafeBlockIds.length === 0) {
+  if (!hasUnsafeBlock) {
     return undefined;
   }
 
   const parts: Doc[] = [];
   let cursor = 0;
-  while (cursor < preserved.length) {
-    let matchedId: string | undefined;
-    let matchedIndex = preserved.length;
-    for (const id of ids) {
-      const index = preserved.indexOf(id, cursor);
-      if (index !== -1 && index < matchedIndex) {
-        matchedId = id;
-        matchedIndex = index;
-      }
-    }
-
-    if (!matchedId) {
-      parts.push(preserved.slice(cursor));
-      break;
-    }
-    parts.push(preserved.slice(cursor, matchedIndex));
-    const child = node.nodes[matchedId];
+  for (const { id, index } of entries) {
+    parts.push(preserved.slice(cursor, index));
+    const child = node.nodes[id];
     parts.push(child.type === "expression" ? formatExpression(child) : child.originalText);
-    cursor = matchedIndex + matchedId.length;
+    cursor = index + id.length;
   }
-
+  parts.push(preserved.slice(cursor));
   return parts;
 }
 
@@ -650,11 +632,9 @@ function segmentHasRenderableText(
     return false;
   }
 
-  let content = segment;
-  for (const id of getProtectedMarkerIds(node)) {
-    content = content.split(id).join("");
-  }
-
+  const content = segment.replace(new RegExp(ANY_MARKER_SOURCE, "g"), (marker) =>
+    node.nodes[marker] ? "" : marker,
+  );
   return /\S/.test(content);
 }
 
@@ -796,7 +776,6 @@ function getStartTagTemplateBlockDoc(
   print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
   block: TemplateBlockNode,
 ): Doc {
-  const ids = getProtectedMarkerIds(block);
   const docs: Doc[] = [];
 
   for (const attribute of splitStartTagAttributes(block.content)) {
@@ -811,28 +790,15 @@ function getStartTagTemplateBlockDoc(
     }
 
     let cursor = 0;
-    while (cursor < attribute.length) {
-      let matchedId: string | undefined;
-      let matchedIndex = attribute.length;
-
-      for (const id of ids) {
-        const index = attribute.indexOf(id, cursor);
-        if (index !== -1 && index < matchedIndex) {
-          matchedId = id;
-          matchedIndex = index;
-        }
+    for (const { id, index } of markerEntries(attribute, block.nodes)) {
+      if (index > cursor) {
+        docs.push(attribute.slice(cursor, index));
       }
-
-      if (!matchedId) {
-        docs.push(attribute.slice(cursor));
-        break;
-      }
-
-      if (matchedIndex > cursor) {
-        docs.push(attribute.slice(cursor, matchedIndex));
-      }
-      docs.push(path.call(print, "nodes", matchedId));
-      cursor = matchedIndex + matchedId.length;
+      docs.push(path.call(print, "nodes", id));
+      cursor = index + id.length;
+    }
+    if (cursor < attribute.length) {
+      docs.push(attribute.slice(cursor));
     }
   }
 
@@ -918,25 +884,12 @@ function hasSafeSingleBlockElementBody(block: TemplateBlockNode): boolean {
 
 function hasAdjacentInlineExpressionBefore(
   container: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  marker: string,
+  previousId: string | undefined,
 ): boolean {
-  const markerIndex = container.content.indexOf(marker);
-  if (markerIndex === -1) {
-    return false;
-  }
-
-  const previousMarker = container.content
-    .slice(0, markerIndex)
-    .match(new RegExp(`(${INLINE_MARKER_SOURCE})\\s*$`))?.[1];
-  return previousMarker ? container.nodes[previousMarker]?.type === "expression" : false;
+  return previousId ? container.nodes[previousId]?.type === "expression" : false;
 }
 
-function isInsideHtmlElement(content: string, marker: string): boolean {
-  const markerIndex = content.indexOf(marker);
-  if (markerIndex === -1) {
-    return false;
-  }
-
+function isInsideHtmlElement(content: string, markerIndex: number): boolean {
   const stack: string[] = [];
   const tags = content
     .slice(0, markerIndex)
@@ -1030,23 +983,16 @@ function isStandaloneBlockLikeNode(
 function getStandaloneLeadingSpacing(
   container: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
   currentNode: DjangoNode,
+  previousId: string | undefined,
+  containerHasHtmlMarkup: boolean,
 ): Doc | undefined {
   if (!isStandaloneBlockLikeNode(currentNode)) {
     return undefined;
   }
 
-  const index = container.content.indexOf(currentNode.id);
-  if (index === -1) {
-    return undefined;
-  }
-
-  const before = container.content.slice(0, index);
-
-  const previousMatch = before.match(new RegExp(`(${PROTECTED_MARKER_SOURCE})(?<gap>\\s*)$`));
-  const previousId = previousMatch?.[1];
   const previousNode = previousId ? container.nodes[previousId] : undefined;
 
-  if (hasHtmlMarkup(container.content)) {
+  if (containerHasHtmlMarkup) {
     return undefined;
   }
 
@@ -1074,6 +1020,8 @@ function getStandaloneLeadingSpacing(
 function shouldInlineWithFollowingProtectedMarker(
   container: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
   currentNode: DjangoNode,
+  nextId: string | undefined,
+  gapAfter: string | undefined,
 ): boolean {
   if (
     currentNode.type !== "template-tag" ||
@@ -1083,48 +1031,50 @@ function shouldInlineWithFollowingProtectedMarker(
     return false;
   }
 
-  const index = container.content.indexOf(currentNode.id);
-  if (index === -1) {
-    return false;
-  }
-
-  const after = container.content.slice(index + currentNode.id.length);
-  const match = after.match(new RegExp(`^(?<gap>[ \\t]+)(?<next>${PROTECTED_MARKER_SOURCE})`));
-  const nextId = match?.groups?.next;
   const nextNode = nextId ? container.nodes[nextId] : undefined;
 
   return (
-    Boolean(match?.groups?.gap) &&
+    Boolean(gapAfter) &&
     nextNode?.type === "template-tag" &&
     nextNode.role === "standalone" &&
     nextNode.protectedMarkerKind === "block"
   );
 }
 
-function restoreInlineProtectedMarkerRuns(
-  currentDoc: string,
-  container: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-): string {
-  const lines = container.content.replace(/\r\n/g, "\n").split("\n");
-  let restored = currentDoc;
-
-  for (const line of lines) {
+function getInlineProtectedMarkerPairs(content: string): Set<string> {
+  const pairs = new Set<string>();
+  for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
     const protectedMarkers = line.match(new RegExp(PROTECTED_MARKER_SOURCE, "g")) ?? [];
     if (protectedMarkers.length < 2 || !/[ \t]/.test(line)) {
       continue;
     }
-
     for (let index = 0; index < protectedMarkers.length - 1; index += 1) {
-      const left = escapeMarkerForRegExp(protectedMarkers[index]);
-      const right = escapeMarkerForRegExp(protectedMarkers[index + 1]);
-      restored = restored.replace(
-        new RegExp(`${left}\\s*\\n\\s*${right}`, "g"),
-        `${protectedMarkers[index]} ${protectedMarkers[index + 1]}`,
-      );
+      pairs.add(`${protectedMarkers[index]}\0${protectedMarkers[index + 1]}`);
     }
   }
+  return pairs;
+}
 
-  return restored;
+function restoreInlineProtectedMarkerRuns(currentDoc: string, pairs: Set<string>): string {
+  const markers = [...currentDoc.matchAll(new RegExp(PROTECTED_MARKER_SOURCE, "g"))];
+  const parts: string[] = [];
+  let cursor = 0;
+
+  for (let index = 0; index < markers.length - 1; index += 1) {
+    const left = markers[index];
+    const right = markers[index + 1];
+    const gapStart = left.index + left[0].length;
+    const gap = currentDoc.slice(gapStart, right.index);
+    if (!/^\s*\n\s*$/.test(gap) || !pairs.has(`${left[0]}\0${right[0]}`)) {
+      continue;
+    }
+
+    parts.push(currentDoc.slice(cursor, gapStart), " ");
+    cursor = right.index;
+  }
+
+  parts.push(currentDoc.slice(cursor));
+  return parts.join("");
 }
 
 function isInsideInlineHtmlElement(value: string, offset: number): boolean {
@@ -1239,6 +1189,40 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
     }
 
     const ids = getProtectedMarkerIds(node);
+    const containerHasHtmlMarkup = hasHtmlMarkup(node.content);
+    const inlineProtectedMarkerPairs = getInlineProtectedMarkerPairs(node.content);
+    const sourceMarkerEntries = markerEntries(node.content, node.nodes);
+    const markerContexts = new Map<
+      string,
+      {
+        index: number;
+        previousId?: string;
+        nextId?: string;
+        gapBefore: string;
+        gapAfter?: string;
+      }
+    >();
+    for (const [index, entry] of sourceMarkerEntries.entries()) {
+      const previous = sourceMarkerEntries[index - 1];
+      const next = sourceMarkerEntries[index + 1];
+      let whitespaceStart = entry.index;
+      while (whitespaceStart > 0 && /\s/.test(node.content[whitespaceStart - 1])) {
+        whitespaceStart -= 1;
+      }
+      const gapBefore = node.content.slice(whitespaceStart, entry.index);
+      const previousId =
+        previous?.index + previous?.id.length === whitespaceStart ? previous.id : undefined;
+      const betweenNext = next
+        ? node.content.slice(entry.index + entry.id.length, next.index)
+        : undefined;
+      markerContexts.set(entry.id, {
+        index: entry.index,
+        previousId,
+        nextId: next && /^[ \t]+$/.test(betweenNext ?? "") ? next.id : undefined,
+        gapBefore,
+        gapAfter: next && /^[ \t]+$/.test(betweenNext ?? "") ? betweenNext : undefined,
+      });
+    }
     if (typeof options.originalText !== "string") {
       throw new TypeError("Prettier did not provide the complete original source.");
     }
@@ -1307,17 +1291,19 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
           }
 
           const currentString = currentDoc;
-          if (!ids.some((id) => currentString.includes(id))) {
+          if (!containsProtectedNodeMarker(currentString, node.nodes)) {
             ignoreDoc = false;
             return currentDoc;
           }
 
           currentDoc = normalizeHtmlAroundProtectedMarkers(
-            restoreInlineProtectedMarkerRuns(currentDoc, node),
+            restoreInlineProtectedMarkerRuns(currentDoc, inlineProtectedMarkerPairs),
           );
 
-          return replaceProtectedMarkersInString(currentDoc, ids, (id, context) => {
+          return replaceProtectedMarkersInString(currentDoc, node.nodes, (id, context) => {
             const currentNode = node.nodes[id];
+            const markerContext = markerContexts.get(id);
+            const sourceMarkerIndex = markerContext?.index ?? -1;
             if (ignoreDoc) {
               return { doc: currentNode.originalText };
             }
@@ -1325,15 +1311,19 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
             const followsInlineExpressionInElement =
               currentNode.type === "template-block" &&
               hasSafeSingleBlockElementBody(currentNode) &&
-              hasAdjacentInlineExpressionBefore(node, id) &&
-              isInsideHtmlElement(node.content, id);
+              hasAdjacentInlineExpressionBefore(node, markerContext?.previousId) &&
+              isInsideHtmlElement(node.content, sourceMarkerIndex);
             const compactNestedBlock = followsInlineExpressionInElement
               ? getCompactSingleElementBlockDoc(currentNode)
               : undefined;
             const rendered = compactNestedBlock ?? path.call(print, "nodes", id);
-            const leadingSpacing = getStandaloneLeadingSpacing(node, currentNode);
-            const markerIndex = node.content.indexOf(id);
-            const sourceGapBefore = node.content.slice(0, markerIndex).match(/\s*$/)?.[0];
+            const leadingSpacing = getStandaloneLeadingSpacing(
+              node,
+              currentNode,
+              markerContext?.previousId,
+              containerHasHtmlMarkup,
+            );
+            const sourceGapBefore = markerContext?.gapBefore;
             const restored =
               followsInlineExpressionInElement && !sourceGapBefore?.includes("\n")
                 ? [builders.trim, builders.hardline, rendered]
@@ -1345,7 +1335,12 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               currentNode.role === "standalone" &&
               currentNode.protectedMarkerKind === "block"
             ) {
-              const inlineWithNext = shouldInlineWithFollowingProtectedMarker(node, currentNode);
+              const inlineWithNext = shouldInlineWithFollowingProtectedMarker(
+                node,
+                currentNode,
+                markerContext?.nextId,
+                markerContext?.gapAfter,
+              );
               return {
                 doc: [
                   printDocumentFlowNode(

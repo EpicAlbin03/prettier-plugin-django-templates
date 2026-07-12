@@ -91,15 +91,9 @@ function readUntil(text: string, start: number, endToken: string, errorMessage?:
   return end + endToken.length;
 }
 
-function findNextSpecial(text: string, from: number): number {
-  const candidates = [
-    text.indexOf("{{", from),
-    text.indexOf("{#", from),
-    text.indexOf("{%", from),
-    text.indexOf("<!--", from),
-  ].filter((index) => index !== -1);
-
-  return candidates.length === 0 ? text.length : Math.min(...candidates);
+function findNextSpecial(text: string, from: number, pattern: RegExp): number {
+  pattern.lastIndex = from;
+  return pattern.exec(text)?.index ?? text.length;
 }
 
 function createTextToken(
@@ -203,6 +197,7 @@ function findIgnoreRegionEnd(
 function tokenize(text: string): Token[] {
   const hostContexts = scanHtmlHostContexts(text);
   const tokens: Token[] = [];
+  const specialPattern = /{{|{#|{%|<!--/g;
   let cursor = 0;
 
   while (cursor < text.length) {
@@ -341,7 +336,7 @@ function tokenize(text: string): Token[] {
       continue;
     }
 
-    const next = findNextSpecial(text, cursor + 1);
+    const next = findNextSpecial(text, cursor + 1, specialPattern);
     tokens.push(createTextToken(text.slice(cursor, next), cursor, next, tokenState));
     cursor = next;
   }
@@ -361,10 +356,6 @@ function countPreNewLines(text: string, to: number): number {
   }
 
   return segment.split("\n").length - 1;
-}
-
-function replaceAt(text: string, replacement: string, start: number, length: number): string {
-  return text.slice(0, start) + replacement + text.slice(start + length);
 }
 
 function normalizeRaw(token: Token): string {
@@ -387,23 +378,38 @@ function matchesEnd(start: TemplateTagNode, endName: string): boolean {
   return getExpectedEndNames(start.keyword).includes(endName);
 }
 
-function hasMatchingBranchParent(token: TagToken, stack: TemplateTagNode[]): boolean {
-  return isPermittedBranch(stack.at(-1)?.keyword, token.name);
+function hasMatchingBranchParent(token: TagToken, stack: OpenBlock[]): boolean {
+  return isPermittedBranch(stack.at(-1)?.start.keyword, token.name);
 }
 
-function actsAsEndTag(token: TagToken, stack: TemplateTagNode[]): boolean {
-  return token.role === "end" || stack.some((entry) => matchesEnd(entry, token.name));
+function actsAsEndTag(token: TagToken, expectedEndCounts: Map<string, number>): boolean {
+  return token.role === "end" || (expectedEndCounts.get(token.name) ?? 0) > 0;
 }
 
 function shouldInlineStandalone(tag: TagToken): boolean {
   return tag.inAttribute || tag.inTag || getStandaloneFlow(tag.name, tag.args) === "inline";
 }
 
-function hasMatchingEnd(tokens: Token[], startIndex: number, startName: string): boolean {
-  const endNames = new Set(getExpectedEndNames(startName));
-  return tokens
-    .slice(startIndex + 1)
-    .some((token) => token.type === "Tag" && endNames.has(token.name));
+function getStandaloneTagsWithLaterEnds(tokens: Token[]): Set<number> {
+  const laterTagNames = new Set<string>();
+  const matches = new Set<number>();
+
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (token.type !== "Tag") {
+      continue;
+    }
+
+    if (
+      token.role === "standalone" &&
+      getExpectedEndNames(token.name).some((endName) => laterTagNames.has(endName))
+    ) {
+      matches.add(index);
+    }
+    laterTagNames.add(token.name);
+  }
+
+  return matches;
 }
 
 function followsIgnoredRegionOrHtmlComment(tokens: Token[], index: number): boolean {
@@ -443,13 +449,22 @@ function protectedMarkerKindForToken(token: Token, forceBlock = false): Protecte
   return "inline";
 }
 
+interface OpenBlock {
+  start: TemplateTagNode;
+  openingRaw: string;
+  parts: string[];
+  childIds: string[];
+}
+
 export const parse: Parser<DjangoNode>["parse"] = (text) => {
   const tokens = tokenize(text);
+  const standaloneTagsWithLaterEnds = getStandaloneTagsWithLaterEnds(tokens);
   const nodes: Record<string, DjangoNode> = {};
+  const rootParts: string[] = [];
   const root: RootNode = {
     type: "root",
     id: "root",
-    content: text,
+    content: "",
     originalText: text,
     preNewLines: 0,
     sourceStart: 0,
@@ -459,24 +474,39 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
   };
 
   const markerAllocator = new InternalMarkerAllocator(text);
-  const protectedSpans = new Map<string, { start: number; length: number }>();
-  let delta = 0;
-  const stack: TemplateTagNode[] = [];
-
+  const stack: OpenBlock[] = [];
+  const expectedEndCounts = new Map<string, number>();
+  const updateExpectedEnds = (keyword: string, change: 1 | -1) => {
+    for (const endName of getExpectedEndNames(keyword)) {
+      const nextCount = (expectedEndCounts.get(endName) ?? 0) + change;
+      if (nextCount === 0) {
+        expectedEndCounts.delete(endName);
+      } else {
+        expectedEndCounts.set(endName, nextCount);
+      }
+    }
+  };
   const createId = (token: Token, forceBlock = false) =>
     markerAllocator.allocate(protectedMarkerKindForToken(token, forceBlock));
+  const append = (value: string, childId?: string) => {
+    const frame = stack.at(-1);
+    (frame?.parts ?? rootParts).push(value);
+    if (childId && frame) {
+      frame.childIds.push(childId);
+    }
+  };
 
   for (const [tokenIndex, token] of tokens.entries()) {
-    const currentIndex = token.start + delta;
+    if (token.type === "Text") {
+      append(token.raw);
+      continue;
+    }
+
     const rawPreNewLines = countPreNewLines(text, token.start);
     const preNewLines =
       rawPreNewLines > 1 && followsIgnoredRegionOrHtmlComment(tokens, tokenIndex)
         ? rawPreNewLines - 1
         : rawPreNewLines;
-
-    if (token.type === "Text") {
-      continue;
-    }
 
     if (token.type === "Expression") {
       const id = createId(token);
@@ -488,14 +518,12 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
-        nodes,
         protectedMarkerKind: protectedMarkerKindForToken(token),
         inTag: token.inTag,
         inAttribute: token.inAttribute,
       };
       nodes[id] = node;
-      root.content = replaceAt(root.content, id, currentIndex, token.raw.length);
-      delta += id.length - token.raw.length;
+      append(id, id);
       continue;
     }
 
@@ -509,14 +537,12 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
-        nodes,
         protectedMarkerKind: protectedMarkerKindForToken(token),
         inTag: token.inTag,
         inAttribute: token.inAttribute,
       };
       nodes[id] = node;
-      root.content = replaceAt(root.content, id, currentIndex, token.raw.length);
-      delta += id.length - token.raw.length;
+      append(id, id);
       continue;
     }
 
@@ -530,15 +556,13 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
-        nodes,
         protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
         inTag: token.inTag,
         inAttribute: token.inAttribute,
         closed: token.closed,
       };
       nodes[id] = node;
-      root.content = replaceAt(root.content, id, currentIndex, token.raw.length);
-      delta += id.length - token.raw.length;
+      append(id, id);
       continue;
     }
 
@@ -552,7 +576,6 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
-        nodes,
         protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
         inTag: token.inTag,
         inAttribute: token.inAttribute,
@@ -562,8 +585,7 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         endArgs: token.endArgs,
       };
       nodes[id] = node;
-      root.content = replaceAt(root.content, id, currentIndex, token.raw.length);
-      delta += id.length - token.raw.length;
+      append(id, id);
       continue;
     }
 
@@ -574,15 +596,12 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       preNewLines,
       sourceStart: token.start,
       sourceEnd: token.end,
-      nodes,
       keyword: token.name,
       role: token.role,
       protectedMarkerKind: protectedMarkerKindForToken(token),
       inTag: token.inTag,
       inAttribute: token.inAttribute,
     } as const;
-    protectedSpans.set(templateTagBase.id, { start: currentIndex, length: token.raw.length });
-
     if (token.role === "branch") {
       if (!hasMatchingBranchParent(token, stack)) {
         throw new Error(
@@ -592,12 +611,11 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
 
       const node: TemplateTagNode = { type: "template-tag", ...templateTagBase };
       nodes[node.id] = node;
-      root.content = replaceAt(root.content, node.id, currentIndex, token.raw.length);
-      delta += node.id.length - token.raw.length;
+      append(node.id, node.id);
       continue;
     }
 
-    if (actsAsEndTag(token, stack)) {
+    if (actsAsEndTag(token, expectedEndCounts)) {
       const endNode: TemplateTagNode = {
         type: "template-tag",
         ...templateTagBase,
@@ -607,7 +625,7 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
 
       let matchIndex = NOT_FOUND;
       for (let index = stack.length - 1; index >= 0; index -= 1) {
-        if (matchesEnd(stack[index], token.name)) {
+        if (matchesEnd(stack[index].start, token.name)) {
           matchIndex = index;
           break;
         }
@@ -616,69 +634,75 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       if (matchIndex === NOT_FOUND) {
         throw new Error(`No start tag found for template end tag "${endNode.originalText}".`);
       }
-
       if (matchIndex !== stack.length - 1) {
-        const innerOpen = stack[stack.length - 1];
+        const innerOpen = stack.at(-1)!.start;
         throw new Error(
           `Unexpected template end tag "${endNode.originalText}" while "${innerOpen.originalText}" is still open.`,
         );
       }
 
-      const startNode = stack.pop()!;
-      const startProtectedSpan = protectedSpans.get(startNode.id)!;
-      const blockText = root.content.slice(
-        startProtectedSpan.start,
-        currentIndex + token.raw.length,
-      );
+      const frame = stack.pop()!;
+      updateExpectedEnds(frame.start.keyword, -1);
+      const content = frame.parts.join("");
+      const blockText = `${frame.openingRaw}${content}${token.raw}`;
       const blockId = markerAllocator.allocate(
-        protectedMarkerKindForToken(token, !startNode.inTag && !startNode.inAttribute),
+        protectedMarkerKindForToken(token, !frame.start.inTag && !frame.start.inAttribute),
       );
       const blockNode: TemplateBlockNode = {
         type: "template-block",
         id: blockId,
-        content: blockText.slice(startProtectedSpan.length, blockText.length - token.raw.length),
+        content,
         originalText: blockText,
-        preNewLines: startNode.preNewLines,
-        sourceStart: startNode.sourceStart,
+        preNewLines: frame.start.preNewLines,
+        sourceStart: frame.start.sourceStart,
         sourceEnd: token.end,
         nodes,
-        protectedMarkerKind: startNode.inTag || startNode.inAttribute ? "inline" : "block",
-        start: startNode,
+        protectedMarkerKind: frame.start.inTag || frame.start.inAttribute ? "inline" : "block",
+        start: frame.start,
         end: endNode,
+        childIds: frame.childIds,
         containsNewLines: /\n/.test(blockText),
-        inTag: startNode.inTag,
-        inAttribute: startNode.inAttribute,
+        inTag: frame.start.inTag,
+        inAttribute: frame.start.inAttribute,
       };
-      nodes[blockId] = blockNode;
-      root.content = replaceAt(root.content, blockId, startProtectedSpan.start, blockText.length);
-      delta += blockId.length - blockText.length;
-      continue;
-    }
-
-    if (token.role === "standalone") {
-      const node: TemplateTagNode = { type: "template-tag", ...templateTagBase };
-      nodes[node.id] = node;
-
-      if (hasMatchingEnd(tokens, tokenIndex, token.name)) {
-        stack.push(node);
-        continue;
+      const parentBlockHasHtmlMarkup = /<(?!!--)[A-Za-z/!][^>]*>/.test(content);
+      frame.start.parentBlockId = blockId;
+      endNode.parentBlockId = blockId;
+      endNode.parentBlockRelationship = "end";
+      endNode.parentBlockInTag = blockNode.inTag;
+      endNode.parentBlockInAttribute = blockNode.inAttribute;
+      endNode.parentBlockHasHtmlMarkup = parentBlockHasHtmlMarkup;
+      for (const childId of frame.childIds) {
+        const child = nodes[childId];
+        child.parentBlockId = blockId;
+        child.parentBlockRelationship = "content";
+        child.parentBlockInTag = blockNode.inTag;
+        child.parentBlockInAttribute = blockNode.inAttribute;
+        child.parentBlockHasHtmlMarkup = parentBlockHasHtmlMarkup;
       }
-
-      root.content = replaceAt(root.content, node.id, currentIndex, token.raw.length);
-      delta += node.id.length - token.raw.length;
+      nodes[blockId] = blockNode;
+      append(blockId, blockId);
       continue;
     }
 
     const node: TemplateTagNode = { type: "template-tag", ...templateTagBase };
     nodes[node.id] = node;
-    stack.push(node);
+    if (token.role === "standalone" && !standaloneTagsWithLaterEnds.has(tokenIndex)) {
+      append(node.id, node.id);
+      continue;
+    }
+
+    stack.push({ start: node, openingRaw: token.raw, parts: [], childIds: [] });
+    updateExpectedEnds(node.keyword, 1);
   }
 
-  for (let index = stack.length - 1; index >= 0; index -= 1) {
-    const node = stack[index];
-    const protectedSpan = protectedSpans.get(node.id)!;
-    root.content = replaceAt(root.content, node.id, protectedSpan.start, protectedSpan.length);
+  for (const frame of stack) {
+    rootParts.push(frame.start.id);
+    for (const part of frame.parts) {
+      rootParts.push(part);
+    }
   }
 
+  root.content = rootParts.join("");
   return root;
 };
