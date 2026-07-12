@@ -129,7 +129,7 @@ describe("HTML host context scanner", () => {
     expect(after?.inAttribute).toBe(false);
   });
 
-  test("marks only ordinary document flow as safe for post-render normalization", () => {
+  test("tracks post-render normalization safety independently of lexical host context", () => {
     const source = `<div {% firstof a b %}><script>{{ value }}{% if enabled %}</script>text`;
     const contexts = scanHtmlHostContexts(source);
     expect(contexts.isDocumentFlowNormalizationSafeAt(offsetOf(source, "{% firstof"))).toBe(true);
