@@ -1,0 +1,158 @@
+import { findProtectedTemplateRegionEnd } from "./template-regions.js";
+
+export type HtmlHostContext = "document-flow" | "start-tag" | "attribute-value";
+
+export interface HtmlHostContextIndex {
+  at(offset: number): HtmlHostContext;
+  isDocumentFlowNormalizationSafeAt(offset: number): boolean;
+}
+
+const DOCUMENT_FLOW = 0;
+const START_TAG = 1;
+const ATTRIBUTE_VALUE = 2;
+
+const contextNames: readonly HtmlHostContext[] = ["document-flow", "start-tag", "attribute-value"];
+
+const protectedConstructEnds = new Map([
+  ["{{", "}}"],
+  ["{%", "%}"],
+  ["{#", "#}"],
+]);
+
+function fillContext(contexts: Uint8Array, from: number, to: number, context: number): void {
+  contexts.fill(context, from, to);
+}
+
+function isRawTextClosingTag(source: string, offset: number, element: "script" | "style"): boolean {
+  let cursor = offset + 1;
+  if (source[cursor] !== "/") {
+    return false;
+  }
+  cursor += 1;
+  while (/\s/.test(source[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (source.slice(cursor, cursor + element.length).toLowerCase() !== element) {
+    return false;
+  }
+  return /[\s>]/.test(source[cursor + element.length] ?? "");
+}
+
+function findDeclarationEnd(source: string, from: number): number {
+  let quote: '"' | "'" | undefined;
+  for (let offset = from; offset < source.length; offset += 1) {
+    const char = source[offset];
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === ">") {
+      return offset + 1;
+    }
+  }
+  return source.length;
+}
+
+/**
+ * Indexes only the HTML-relative contexts needed by parser and printer callers.
+ * Unclosed tags and quoted values conservatively retain their context through EOF.
+ */
+export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
+  const contexts = new Uint8Array(source.length);
+  const documentFlowNormalizationSafety = new Uint8Array(source.length).fill(1);
+  let inTag = false;
+  let quote: '"' | "'" | undefined;
+  let tagStart = -1;
+  let rawTextElement: "script" | "style" | undefined;
+
+  for (let offset = 0; offset < source.length; offset += 1) {
+    const context = quote ? ATTRIBUTE_VALUE : inTag ? START_TAG : DOCUMENT_FLOW;
+    contexts[offset] = context;
+
+    if (rawTextElement) {
+      documentFlowNormalizationSafety[offset] = 0;
+      if (source[offset] !== "<" || !isRawTextClosingTag(source, offset, rawTextElement)) {
+        continue;
+      }
+      rawTextElement = undefined;
+    }
+
+    const protectedRegionEnd = findProtectedTemplateRegionEnd(
+      source,
+      offset,
+      context === DOCUMENT_FLOW,
+    );
+    if (protectedRegionEnd !== undefined) {
+      fillContext(contexts, offset, protectedRegionEnd, context);
+      fillContext(documentFlowNormalizationSafety, offset, protectedRegionEnd, 0);
+      offset = protectedRegionEnd - 1;
+      continue;
+    }
+
+    const protectedEnd = protectedConstructEnds.get(source.slice(offset, offset + 2));
+    if (protectedEnd) {
+      const close = source.indexOf(protectedEnd, offset + 2);
+      const end = close === -1 ? source.length : close + protectedEnd.length;
+      fillContext(contexts, offset, end, context);
+      offset = end - 1;
+      continue;
+    }
+
+    if (!inTag && source.startsWith("<!--", offset)) {
+      const close = source.indexOf("-->", offset + 4);
+      const end = close === -1 ? source.length : close + 3;
+      fillContext(contexts, offset, end, DOCUMENT_FLOW);
+      fillContext(documentFlowNormalizationSafety, offset, end, 0);
+      offset = end - 1;
+      continue;
+    }
+
+    if (!inTag && (source.startsWith("<!", offset) || source.startsWith("<?", offset))) {
+      const end = findDeclarationEnd(source, offset + 2);
+      fillContext(contexts, offset, end, DOCUMENT_FLOW);
+      fillContext(documentFlowNormalizationSafety, offset, end, 0);
+      offset = end - 1;
+      continue;
+    }
+
+    const char = source[offset];
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (!inTag && char === "<" && /[A-Za-z/]/.test(source[offset + 1] ?? "")) {
+      inTag = true;
+      tagStart = offset;
+      continue;
+    }
+
+    if (inTag && char === ">") {
+      const tagText = source.slice(tagStart, offset + 1);
+      const openingRawTextTag = tagText.match(/^<\s*(script|style)(?=[\s/>])/i)?.[1];
+      if (openingRawTextTag && !/\/\s*>$/.test(tagText)) {
+        rawTextElement = openingRawTextTag.toLowerCase() as "script" | "style";
+      }
+      inTag = false;
+      tagStart = -1;
+      continue;
+    }
+
+    if (inTag && (char === '"' || char === "'")) {
+      quote = char;
+    }
+  }
+
+  return {
+    at(offset: number): HtmlHostContext {
+      return contextNames[contexts[offset] ?? DOCUMENT_FLOW];
+    },
+    isDocumentFlowNormalizationSafeAt(offset: number): boolean {
+      return documentFlowNormalizationSafety[offset] === 1;
+    },
+  };
+}

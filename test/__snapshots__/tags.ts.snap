@@ -1,0 +1,28 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`custom and ecosystem tag regressions > preserves django-components metadata behavior idempotently 1`] = `
+"<div class="card"{% html_attrs attrs defaults:class="base" %}>
+  {% component "button" %}
+    x
+  {% endcomponent %}
+</div>
+"
+`;
+
+exports[`custom and ecosystem tag regressions > preserves unknown name beginning with end behavior idempotently 1`] = `
+"<p>
+  a
+  {% endpoint_asset %}
+  b
+</p>
+"
+`;
+
+exports[`custom and ecosystem tag regressions > preserves unknown standalone behavior idempotently 1`] = `
+"<p>
+  a
+  {% custom_asset %}
+  b
+</p>
+"
+`;

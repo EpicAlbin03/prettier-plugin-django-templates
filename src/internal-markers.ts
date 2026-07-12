@@ -3,11 +3,20 @@ export type InternalMarkerKind = "inline" | "block" | "attr" | "temporary-run";
 export const INLINE_MARKER_SOURCE = String.raw`DJ\d+X`;
 export const BLOCK_MARKER_SOURCE = String.raw`<!--DJ\d+-->`;
 export const ATTRIBUTE_MARKER_SOURCE = String.raw`dj\d+=""`;
-export const TEMPORARY_RUN_MARKER_SOURCE = String.raw`DJ_INLINE_RUN_\d+_X`;
+const TEMPORARY_RUN_MARKER_PREFIX = "DJ_INLINE_RUN_";
+export const TEMPORARY_RUN_MARKER_SOURCE = `${TEMPORARY_RUN_MARKER_PREFIX}\\d+_X`;
 export const PROTECTED_MARKER_SOURCE = `(?:${BLOCK_MARKER_SOURCE}|${INLINE_MARKER_SOURCE})`;
 
 export function escapeMarkerForRegExp(marker: string): string {
   return marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function containsBlockMarker(value: string): boolean {
+  return new RegExp(BLOCK_MARKER_SOURCE).test(value);
+}
+
+function legacyTemporaryRunMarkerFor(id: number): string {
+  return `${TEMPORARY_RUN_MARKER_PREFIX}${id}`;
 }
 
 function markerFor(id: number, kind: InternalMarkerKind): string {
@@ -17,7 +26,7 @@ function markerFor(id: number, kind: InternalMarkerKind): string {
     case "attr":
       return `dj${id}=""`;
     case "temporary-run":
-      return `DJ_INLINE_RUN_${id}_X`;
+      return `${TEMPORARY_RUN_MARKER_PREFIX}${id}_X`;
     default:
       return `DJ${id}X`;
   }
@@ -41,7 +50,7 @@ export class InternalMarkerAllocator {
       const candidates = representations
         .map((candidateKind) => markerFor(id, candidateKind))
         // The old printer token is included so every historical representation is skipped too.
-        .concat(`DJ_INLINE_RUN_${id}`);
+        .concat(legacyTemporaryRunMarkerFor(id));
 
       if (
         candidates.some(

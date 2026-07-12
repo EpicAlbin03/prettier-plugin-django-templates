@@ -1,8 +1,3 @@
-export const ProtectedMarker = {
-  startToken: "#~",
-  endToken: "~#",
-};
-
 export type ProtectedMarkerKind = "inline" | "block" | "attr";
 
 export type DjangoNode =

@@ -1,13 +1,21 @@
 import type { AstPath, Doc, Options, Printer } from "prettier";
 import { doc } from "prettier";
+import { scanHtmlHostContexts } from "./html-host-context.js";
 import {
   ATTRIBUTE_MARKER_SOURCE,
   BLOCK_MARKER_SOURCE,
+  containsBlockMarker,
   escapeMarkerForRegExp,
   INLINE_MARKER_SOURCE,
   InternalMarkerAllocator,
   PROTECTED_MARKER_SOURCE,
 } from "./internal-markers.js";
+import {
+  getStartTagFormatting,
+  isBranchTag,
+  startsDocumentFlowAfterExpression,
+  startsDocumentFlowAfterTag,
+} from "./tags.js";
 import type {
   RootNode,
   TemplateBlockNode,
@@ -325,7 +333,7 @@ function splitAtTemplateTags(
         entry.type === "template-tag" &&
         !entry.inTag &&
         !entry.inAttribute &&
-        (["else", "elif", "empty", "plural"].includes(entry.keyword) ||
+        (isBranchTag(entry.keyword) ||
           ((splitStandaloneTemplateTags || node.content.startsWith(entry.id)) &&
             entry.role === "standalone" &&
             entry.protectedMarkerKind === "block")),
@@ -491,16 +499,11 @@ function printTemplateTag(node: TemplateTagNode): Doc {
   const templateTag = `{% ${node.content.trim()} %}`;
   const block = surroundingTemplateBlock(node);
 
-  if (node.keyword === "html_attrs") {
+  if (getStartTagFormatting(node.keyword) === "trim-leading") {
     return [builders.trim, templateTag];
   }
 
-  if (
-    ["else", "elif", "empty", "plural"].includes(node.keyword) &&
-    block &&
-    !block.inTag &&
-    !block.inAttribute
-  ) {
+  if (isBranchTag(node.keyword) && block && !block.inTag && !block.inAttribute) {
     return [builders.dedent(builders.hardline), templateTag, builders.hardline];
   }
 
@@ -1148,37 +1151,22 @@ function isInsideInlineHtmlElement(value: string, offset: number): boolean {
 // This legacy generic pass handles unrelated document-flow boundaries. Whitespace-sensitive inline
 // flow is built as a Doc above and deliberately excluded from this post-render normalization.
 function normalizeAdjacentDocumentFlowConstructs(value: string): string {
-  const inAttributeValue = Array.from<boolean>({ length: value.length }).fill(false);
-  let quote: '"' | "'" | undefined;
-  let inTag = false;
+  const hostContexts = scanHtmlHostContexts(value);
 
-  for (let index = 0; index < value.length; index += 1) {
-    inAttributeValue[index] = quote !== undefined;
-    const char = value[index];
+  return value.replace(/%}(?={% )|\}\}(?={% )/g, (boundary, offset: number) => {
+    const nextKeyword = value.slice(offset + boundary.length).match(/^{%\s+(\S+)/)?.[1] ?? "";
+    const isFormattingBoundary =
+      boundary === "}}"
+        ? startsDocumentFlowAfterExpression(nextKeyword)
+        : startsDocumentFlowAfterTag(nextKeyword);
 
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (char === "<" && /[A-Za-z!/]/.test(value[index + 1] ?? "")) {
-      inTag = true;
-    } else if (char === ">") {
-      inTag = false;
-    } else if ((char === '"' || char === "'") && inTag) {
-      quote = char;
-    }
-  }
-
-  return value.replace(
-    /%}(?={% (?!end|else|elif|empty|plural))|\}\}(?={% if\b)/g,
-    (boundary, offset: number) =>
-      inAttributeValue[offset] || isInsideInlineHtmlElement(value, offset)
-        ? boundary
-        : `${boundary}\n`,
-  );
+    return !isFormattingBoundary ||
+      hostContexts.at(offset) !== "document-flow" ||
+      !hostContexts.isDocumentFlowNormalizationSafeAt(offset) ||
+      isInsideInlineHtmlElement(value, offset)
+      ? boundary
+      : `${boundary}\n`;
+  });
 }
 
 function normalizeHtmlAroundProtectedMarkers(currentDoc: string): string {
@@ -1203,20 +1191,17 @@ function normalizeHtmlAroundProtectedMarkers(currentDoc: string): string {
 
 function prepareSegmentForHtml(
   segment: string,
-  ids: string[],
   markerAllocator: InternalMarkerAllocator,
 ): {
   segment: string;
   beforeReplacements: Array<{ token: string; value: string }>;
-  afterReplacements: Array<{ token: string; value: string }>;
 } {
   const beforeReplacements: Array<{ token: string; value: string }> = [];
-  const afterReplacements: Array<{ token: string; value: string }> = [];
 
   let prepared = segment.replace(
     new RegExp(`((${PROTECTED_MARKER_SOURCE})(?:[ \\t]+${PROTECTED_MARKER_SOURCE})+)`, "g"),
     (run) => {
-      if (run.includes("<!--DJ")) {
+      if (containsBlockMarker(run)) {
         return run;
       }
 
@@ -1238,18 +1223,7 @@ function prepareSegmentForHtml(
         (open.match(/\s+\S+=/g) ?? []).length > 1 ? `${open}\n  ${body}\n${close}${trail}` : match,
     );
 
-  prepared = prepared.replace(
-    /(<script\b[^>]*>)([\s\S]*?)(<\/script>)/gi,
-    (match, _openTag, body) => {
-      if (ids.some((id) => body.includes(id)) || /\{[%#{]/.test(body)) {
-        return match;
-      }
-
-      return match;
-    },
-  );
-
-  return { segment: prepared, beforeReplacements, afterReplacements };
+  return { segment: prepared, beforeReplacements };
 }
 
 export const embed: Printer<DjangoNode>["embed"] = () => {
@@ -1305,7 +1279,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
         const preservedSegment = getPreservedSingleLineHtmlSegment(node, segment);
         const whitespaceSensitiveInlineDoc = getWhitespaceSensitiveInlineElementDoc(node, segment);
         const singleElementStandaloneTagDoc = getSingleElementStandaloneTagDoc(node, segment);
-        const preparedSegment = prepareSegmentForHtml(segment, ids, markerAllocator);
+        const preparedSegment = prepareSegmentForHtml(segment, markerAllocator);
         const doc = node.nodes[segment]
           ? segment
           : (whitespaceSensitiveInlineDoc ??
@@ -1335,26 +1309,14 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
           const currentString = currentDoc;
           if (!ids.some((id) => currentString.includes(id))) {
             ignoreDoc = false;
-            let plainDoc: Doc = currentDoc;
-            for (const replacement of preparedSegment.afterReplacements) {
-              if (typeof plainDoc === "string") {
-                plainDoc = plainDoc.split(replacement.token).join(replacement.value);
-              } else {
-                plainDoc = mapDoc(plainDoc, (docPart) =>
-                  typeof docPart === "string"
-                    ? docPart.split(replacement.token).join(replacement.value)
-                    : docPart,
-                );
-              }
-            }
-            return plainDoc;
+            return currentDoc;
           }
 
           currentDoc = normalizeHtmlAroundProtectedMarkers(
             restoreInlineProtectedMarkerRuns(currentDoc, node),
           );
 
-          let replacedDoc = replaceProtectedMarkersInString(currentDoc, ids, (id, context) => {
+          return replaceProtectedMarkersInString(currentDoc, ids, (id, context) => {
             const currentNode = node.nodes[id];
             if (ignoreDoc) {
               return { doc: currentNode.originalText };
@@ -1414,33 +1376,10 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               doc: restored,
               trimLeadingWhitespace:
                 Boolean(leadingSpacing) ||
-                (currentNode.type === "template-tag" && currentNode.keyword === "html_attrs"),
+                (currentNode.type === "template-tag" &&
+                  getStartTagFormatting(currentNode.keyword) === "trim-leading"),
             };
           });
-
-          for (const replacement of preparedSegment.afterReplacements) {
-            if (typeof replacedDoc === "string") {
-              replacedDoc = replacedDoc
-                .split(`${replacement.token};`)
-                .join(replacement.value)
-                .split(replacement.token)
-                .join(replacement.value);
-            } else {
-              replacedDoc = mapDoc(replacedDoc, (docPart) => {
-                if (typeof docPart !== "string") {
-                  return docPart;
-                }
-
-                return docPart
-                  .split(`${replacement.token};`)
-                  .join(replacement.value)
-                  .split(replacement.token)
-                  .join(replacement.value);
-              });
-            }
-          }
-
-          return replacedDoc;
         });
       }),
     );

@@ -1,6 +1,19 @@
 import type { Parser } from "prettier";
+import { scanHtmlHostContexts } from "./html-host-context.js";
 import { InternalMarkerAllocator } from "./internal-markers.js";
-import { getTagRole, isBlockStandaloneTag, isInlineStandaloneTag, isRawTag } from "./tags.js";
+import {
+  findRawBodyEnd,
+  IGNORE_REGION_DELIMITERS,
+  type IgnoreRegionDelimiter,
+} from "./template-regions.js";
+import {
+  getExpectedEndNames,
+  getStandaloneFlow,
+  getTagRole,
+  hasExactRawBodyEnd,
+  isPermittedBranch,
+  isRawBodyTag,
+} from "./tags.js";
 import type {
   TemplateBlockNode,
   CommentNode,
@@ -15,7 +28,7 @@ import type {
 
 const NOT_FOUND = -1;
 
-type TokenType = "Text" | "Variable" | "Comment" | "Tag" | "RawBlock" | "IgnoreBlock";
+type TokenType = "Text" | "Expression" | "Comment" | "Tag" | "RawBlock" | "IgnoreRegion";
 
 interface TokenBase {
   type: TokenType;
@@ -31,16 +44,16 @@ interface TextToken extends TokenBase {
   type: "Text";
 }
 
-interface VariableToken extends TokenBase {
-  type: "Variable";
+interface ExpressionToken extends TokenBase {
+  type: "Expression";
 }
 
 interface CommentToken extends TokenBase {
   type: "Comment";
 }
 
-interface IgnoreBlockToken extends TokenBase {
-  type: "IgnoreBlock";
+interface IgnoreRegionToken extends TokenBase {
+  type: "IgnoreRegion";
   closed: boolean;
 }
 
@@ -59,23 +72,13 @@ interface RawBlockToken extends TokenBase {
   endArgs?: string;
 }
 
-type Token = TextToken | VariableToken | CommentToken | IgnoreBlockToken | TagToken | RawBlockToken;
-
-interface IgnoreDelimiterPair {
-  opener: string;
-  closer: string;
-}
-
-const IGNORE_BLOCK_DELIMITERS: readonly IgnoreDelimiterPair[] = [
-  {
-    opener: "<!-- prettier-ignore-start -->",
-    closer: "<!-- prettier-ignore-end -->",
-  },
-  {
-    opener: "{# prettier-ignore-start #}",
-    closer: "{# prettier-ignore-end #}",
-  },
-];
+type Token =
+  | TextToken
+  | ExpressionToken
+  | CommentToken
+  | IgnoreRegionToken
+  | TagToken
+  | RawBlockToken;
 
 function readUntil(text: string, start: number, endToken: string, errorMessage?: string): number {
   const end = text.indexOf(endToken, start);
@@ -97,43 +100,6 @@ function findNextSpecial(text: string, from: number): number {
   ].filter((index) => index !== -1);
 
   return candidates.length === 0 ? text.length : Math.min(...candidates);
-}
-
-function getHtmlState(text: string): Array<{ inAttribute: boolean; inTag: boolean }> {
-  const states = Array.from<{ inAttribute: boolean; inTag: boolean }>({ length: text.length });
-  let quote: '"' | "'" | null = null;
-  let inTag = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    states[index] = { inAttribute: quote !== null, inTag };
-    const char = text[index];
-
-    if (quote !== null) {
-      if (char === quote) {
-        quote = null;
-      }
-      continue;
-    }
-
-    if (char === "<") {
-      const next = text[index + 1] ?? "";
-      if (/[A-Za-z!/]/.test(next)) {
-        inTag = true;
-      }
-      continue;
-    }
-
-    if (char === ">") {
-      inTag = false;
-      continue;
-    }
-
-    if ((char === '"' || char === "'") && inTag) {
-      quote = char;
-    }
-  }
-
-  return states;
 }
 
 function createTextToken(
@@ -223,51 +189,10 @@ function createTagToken(
   };
 }
 
-function findRawBlockEnd(
+function findIgnoreRegionEnd(
   text: string,
   from: number,
-  name: string,
-  openingContent: string,
-): { end: number; closingStart: number; endArgs: string } | null {
-  // Django's lexer ends verbatim only when the complete stripped tag content matches.
-  const expectedClosingContent = `end${openingContent}`;
-  const endName = `end${name}`;
-  let cursor = from;
-
-  while (cursor < text.length) {
-    const tagStart = text.indexOf("{%", cursor);
-    if (tagStart === -1) {
-      return null;
-    }
-
-    const closeDelimiter = text.indexOf("%}", tagStart + 2);
-    if (closeDelimiter === -1) {
-      return null;
-    }
-
-    const tagContent = text.slice(tagStart + 2, closeDelimiter).trim();
-    const [tagName, ...rest] = tagContent.split(/\s+/);
-    const isMatchingEnd =
-      name === "verbatim" ? tagContent === expectedClosingContent : tagName === endName;
-
-    if (isMatchingEnd) {
-      return {
-        end: closeDelimiter + 2,
-        closingStart: tagStart,
-        endArgs: rest.join(" "),
-      };
-    }
-
-    cursor = closeDelimiter + 2;
-  }
-
-  return null;
-}
-
-function findIgnoreBlockEnd(
-  text: string,
-  from: number,
-  delimiter: IgnoreDelimiterPair,
+  delimiter: IgnoreRegionDelimiter,
 ): { end: number; closed: boolean } {
   const closerStart = text.indexOf(delimiter.closer, from);
   return closerStart === -1
@@ -276,25 +201,29 @@ function findIgnoreBlockEnd(
 }
 
 function tokenize(text: string): Token[] {
-  const state = getHtmlState(text);
+  const hostContexts = scanHtmlHostContexts(text);
   const tokens: Token[] = [];
   let cursor = 0;
 
   while (cursor < text.length) {
-    const tokenState = state[cursor] ?? { inAttribute: false, inTag: false };
+    const hostContext = hostContexts.at(cursor);
+    const tokenState = {
+      inAttribute: hostContext === "attribute-value",
+      inTag: hostContext !== "document-flow",
+    };
 
-    const ignoreDelimiter = IGNORE_BLOCK_DELIMITERS.find(({ opener }) =>
+    const ignoreDelimiter = IGNORE_REGION_DELIMITERS.find(({ opener }) =>
       text.startsWith(opener, cursor),
     );
     if (ignoreDelimiter) {
-      const { end, closed } = findIgnoreBlockEnd(
+      const { end, closed } = findIgnoreRegionEnd(
         text,
         cursor + ignoreDelimiter.opener.length,
         ignoreDelimiter,
       );
       const raw = text.slice(cursor, end);
       tokens.push({
-        type: "IgnoreBlock",
+        type: "IgnoreRegion",
         raw,
         content: raw,
         start: cursor,
@@ -324,7 +253,7 @@ function tokenize(text: string): Token[] {
       );
       const raw = text.slice(cursor, end);
       tokens.push({
-        type: "Variable",
+        type: "Expression",
         raw,
         content: raw.slice(2, -2),
         start: cursor,
@@ -367,9 +296,9 @@ function tokenize(text: string): Token[] {
       const raw = text.slice(cursor, end);
       const tag = createTagToken(raw, cursor, end, tokenState);
 
-      if (isRawTag(tag.name) && !tag.inTag && !tag.inAttribute) {
+      if (isRawBodyTag(tag.name) && !tag.inTag && !tag.inAttribute) {
         const openingContent = raw.slice(2, -2).trim();
-        const blockEndInfo = findRawBlockEnd(text, end, tag.name, openingContent);
+        const blockEndInfo = findRawBodyEnd(text, end, tag.name, openingContent);
         if (blockEndInfo) {
           const blockRaw = text.slice(cursor, blockEndInfo.end);
           tokens.push({
@@ -389,8 +318,8 @@ function tokenize(text: string): Token[] {
           continue;
         }
 
-        if (tag.name === "verbatim" && tag.args) {
-          // Django's lexer remains in named verbatim mode through EOF without an exact terminator.
+        if (hasExactRawBodyEnd(tag.name) && tag.args) {
+          // An exact-content raw body remains protected through EOF without its exact terminator.
           tokens.push({
             type: "RawBlock",
             raw: text.slice(cursor),
@@ -440,71 +369,38 @@ function replaceAt(text: string, replacement: string, start: number, length: num
 
 function normalizeRaw(token: Token): string {
   switch (token.type) {
-    case "Variable":
+    case "Expression":
       return `{{ ${token.content.trim()} }}`;
     case "Comment":
       return `{# ${token.content.trim()} #}`;
     case "Tag":
       return `{% ${token.content.trim()} %}`;
     case "RawBlock":
-    case "IgnoreBlock":
+    case "IgnoreRegion":
       return token.raw;
     default:
       return token.raw;
   }
 }
 
-function expectedEndNames(startName: string): string[] {
-  const candidates = [`end${startName}`];
-
-  if (startName.endsWith("_custom_end")) {
-    candidates.push(startName.replace(/_custom_end$/, "end"));
-  }
-
-  if (startName.startsWith("dnd_")) {
-    candidates.push(`end_${startName}`);
-  }
-
-  return candidates;
-}
-
 function matchesEnd(start: TemplateTagNode, endName: string): boolean {
-  return expectedEndNames(start.keyword).includes(endName);
+  return getExpectedEndNames(start.keyword).includes(endName);
 }
-
-const BRANCH_PARENTS: Record<string, string[]> = {
-  elif: ["if"],
-  else: ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag"],
-  empty: ["for"],
-  plural: ["blocktranslate", "blocktrans"],
-};
 
 function hasMatchingBranchParent(token: TagToken, stack: TemplateTagNode[]): boolean {
-  return BRANCH_PARENTS[token.name]?.includes(stack[stack.length - 1]?.keyword) ?? false;
+  return isPermittedBranch(stack.at(-1)?.keyword, token.name);
 }
 
 function actsAsEndTag(token: TagToken, stack: TemplateTagNode[]): boolean {
   return token.role === "end" || stack.some((entry) => matchesEnd(entry, token.name));
 }
 
-function isStandaloneUrlAssignment(tag: TagToken): boolean {
-  return tag.name === "url" && /\bas\s+\S+$/.test(tag.args);
-}
-
 function shouldInlineStandalone(tag: TagToken): boolean {
-  if (isStandaloneUrlAssignment(tag) && !tag.inAttribute && !tag.inTag) {
-    return false;
-  }
-
-  if (isBlockStandaloneTag(tag.name) && !tag.inAttribute && !tag.inTag) {
-    return false;
-  }
-
-  return isInlineStandaloneTag(tag.name) || tag.inAttribute || tag.inTag;
+  return tag.inAttribute || tag.inTag || getStandaloneFlow(tag.name, tag.args) === "inline";
 }
 
 function hasMatchingEnd(tokens: Token[], startIndex: number, startName: string): boolean {
-  const endNames = new Set(expectedEndNames(startName));
+  const endNames = new Set(getExpectedEndNames(startName));
   return tokens
     .slice(startIndex + 1)
     .some((token) => token.type === "Tag" && endNames.has(token.name));
@@ -517,7 +413,7 @@ function followsIgnoredRegionOrHtmlComment(tokens: Token[], index: number): bool
       continue;
     }
 
-    if (token.type === "IgnoreBlock") {
+    if (token.type === "IgnoreRegion") {
       return true;
     }
 
@@ -540,7 +436,7 @@ function protectedMarkerKindForToken(token: Token, forceBlock = false): Protecte
     return "block";
   }
 
-  if (token.type === "IgnoreBlock" || token.type === "RawBlock") {
+  if (token.type === "IgnoreRegion" || token.type === "RawBlock") {
     return token.inTag || token.inAttribute ? "inline" : "block";
   }
 
@@ -582,7 +478,7 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       continue;
     }
 
-    if (token.type === "Variable") {
+    if (token.type === "Expression") {
       const id = createId(token);
       const node: ExpressionNode = {
         type: "expression",
@@ -624,7 +520,7 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       continue;
     }
 
-    if (token.type === "IgnoreBlock") {
+    if (token.type === "IgnoreRegion") {
       const id = createId(token, !token.inTag && !token.inAttribute);
       const node: IgnoreRegionNode = {
         type: "ignore-region",
