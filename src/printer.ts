@@ -404,14 +404,6 @@ function formatExpression(node: ExpressionNode): string {
   return `{{ ${node.content.trim()} }}`;
 }
 
-function printExpression(node: ExpressionNode): Doc {
-  const expression = formatExpression(node);
-  if (node.preNewLines > 1) {
-    return builders.group([builders.trim, builders.hardline, expression]);
-  }
-  return expression;
-}
-
 function getExpressionOnlyBlockDoc(block: TemplateBlockNode): Doc | undefined {
   const lines = block.content.replace(/\r\n/g, "\n").split("\n");
 
@@ -632,8 +624,9 @@ function segmentHasRenderableText(
     return false;
   }
 
+  // Expressions render text, so their markers must count when deciding segment separators.
   const content = segment.replace(new RegExp(ANY_MARKER_SOURCE, "g"), (marker) =>
-    node.nodes[marker] ? "" : marker,
+    node.nodes[marker] && node.nodes[marker].type !== "expression" ? "" : marker,
   );
   return /\S/.test(content);
 }
@@ -953,7 +946,7 @@ export const print: Printer<DjangoNode>["print"] = (path) => {
 
   switch (node.type) {
     case "expression":
-      return printExpression(node);
+      return formatExpression(node);
     case "template-tag":
       return printTemplateTag(node);
     case "comment":
