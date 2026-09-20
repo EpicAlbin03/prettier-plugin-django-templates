@@ -43,7 +43,7 @@
     "dev": "vp pack --watch",
     "test": "vp test",
     "test:package": "node test/package-smoke.mjs",
-    "benchmark:performance": "vp run build && vp test bench test/benchmark-performance.bench.mjs --reporter=verbose",
+    "benchmark:performance": "vp run build && vp test bench test/performance.bench.mjs --reporter=verbose",
     "validate:release": "vp run check && vp run test && vp run build && pnpm pack --dry-run && vp run test:package",
     "check": "vp check",
     "check:fix": "vp check --fix",

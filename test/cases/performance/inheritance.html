@@ -1,0 +1,13 @@
+{% extends "layouts/dashboard.html" %}
+{% load static i18n %}
+{% block title %}{{ project.name }} — {% trans "Dashboard" %}{% endblock %}
+{% block extra_head %}{{ block.super }}<link rel="stylesheet" href="{% static 'css/dashboard.css' %}">{% endblock %}
+{% block breadcrumbs %}<nav aria-label="Breadcrumb"><a href="{% url 'projects:list' %}">Projects</a><span>{{ project.name }}</span></nav>{% endblock %}
+{% block content %}
+<header><h1>{{ project.name }}</h1><p>{{ project.description|linebreaksbr }}</p></header>
+<div class="dashboard-grid">
+{% include "projects/summary.html" with project=project only %}
+<section><h2>Activity</h2>{% for event in events %}{% include "projects/event.html" with event=event only %}{% empty %}<p>No activity.</p>{% endfor %}</section>
+</div>
+{% endblock %}
+{% block scripts %}{{ block.super }}<script src="{% static 'js/dashboard.js' %}" defer></script>{% endblock %}

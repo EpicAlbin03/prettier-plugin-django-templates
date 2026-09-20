@@ -1,0 +1,10 @@
+{% load static %}
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>{{ page.title }}</title>
+<style>.chart{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.chart__legend{font-weight:600;color:#334155}@media(max-width:40rem){.chart{grid-template-columns:1fr}}</style>
+</head><body>
+<main><h1>{{ page.title }}</h1><div class="chart" data-endpoint="{% url 'metrics:data' %}"><canvas id="metrics"></canvas><p class="chart__legend">{{ page.legend }}</p></div></main>
+{{ chart_data|json_script:"chart-data" }}
+<script>const data=JSON.parse(document.getElementById("chart-data").textContent);function totals(rows){return rows.map(row=>({label:row.label,total:row.values.reduce((sum,value)=>sum+value,0)}));}window.chartTotals=totals(data);</script>
+<script src="{% static 'js/charts.js' %}" defer></script>
+</body></html>
