@@ -60,12 +60,20 @@ try {
   assert.deepEqual(packedFiles, [
     "LICENSE",
     "README.md",
+    "dist/browser.d.mts",
     "dist/browser.mjs",
     "dist/plugin.cjs",
     "dist/plugin.cjs.map",
     "dist/plugin.d.cts",
     "package.json",
   ]);
+
+  console.log(runPnpm(["exec", "publint", tarballPath, "--strict"]));
+  console.log(runPnpm(["exec", "attw", tarballPath, "--exclude-entrypoints", "browser"]));
+  // The browser entry is for ESM-aware bundlers, not CommonJS or legacy Node resolution.
+  console.log(
+    runPnpm(["exec", "attw", tarballPath, "--entrypoints", "browser", "--profile", "esm-only"]),
+  );
 
   await writeFile(
     join(temporaryDirectory, "package.json"),
@@ -96,9 +104,12 @@ for (const member of ["languages", "parsers", "printers"]) {
     `
 import type { Plugin } from "prettier";
 import * as plugin from "${packageName}";
+import * as browserPlugin from "${packageName}/browser";
 
 const resolvedPlugin: Plugin = plugin;
+const resolvedBrowserPlugin: Plugin = browserPlugin;
 void resolvedPlugin;
+void resolvedBrowserPlugin;
 `,
   );
   await writeFile(

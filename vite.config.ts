@@ -39,7 +39,7 @@ export default defineConfig({
         browser: "src/index.ts",
       },
       format: "esm",
-      dts: false,
+      dts: true,
       deps: {
         neverBundle: [externalPrettier],
       },

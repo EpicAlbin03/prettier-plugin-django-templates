@@ -32,7 +32,10 @@
       "require": "./dist/plugin.cjs",
       "default": "./dist/plugin.cjs"
     },
-    "./browser": "./dist/browser.mjs",
+    "./browser": {
+      "types": "./dist/browser.d.mts",
+      "default": "./dist/browser.mjs"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -55,6 +58,7 @@
     "changeset:publish": "changeset publish"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@changesets/changelog-github": "^1.0.1",
     "@changesets/cli": "^3.0.3",
     "@oxlint/plugins": "1.83.0",
@@ -62,6 +66,7 @@
     "@typescript/native": "npm:typescript@^7.0.2",
     "oxlint": "1.83.0",
     "prettier": "^3.9.8",
+    "publint": "^0.3.24",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vite-plus": "catalog:",
     "vitest": "catalog:"

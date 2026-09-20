@@ -73,10 +73,6 @@ Or using template comments:
 
 Import `prettier-plugin-django-templates/browser` from an ESM-aware bundler to get an entry that depends on `prettier/standalone` and does not use Node APIs. The browser entry is intended for bundlers such as Vite. It is not a self-contained bundle and direct no-build CDN or script-tag usage is not supported.
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, package validation, and changeset requirements.
-
 ## Credits
 
 - [prettier-plugin-jinja-template](https://github.com/davidodenwald/prettier-plugin-jinja-template/tree/master) (parser, printer, tests)
