@@ -290,7 +290,7 @@ function tokenize(text: string): Token[] {
       const raw = text.slice(cursor, end);
       const tag = createTagToken(raw, cursor, end, tokenState);
 
-      if (isRawBodyTag(tag.name) && !tag.inTag && !tag.inAttribute) {
+      if (isRawBodyTag(tag.name)) {
         const openingContent = raw.slice(2, -2).trim();
         const blockEndInfo = findRawBodyEnd(text, end, tag.name, openingContent);
         if (blockEndInfo) {
