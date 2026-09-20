@@ -450,7 +450,6 @@ function protectedMarkerKindForToken(token: Token, forceBlock = false): Protecte
 
 interface OpenBlock {
   start: TemplateTagNode;
-  openingRaw: string;
   parts: string[];
   childIds: string[];
 }
@@ -643,7 +642,7 @@ export function parse(text: string): RootNode {
       const frame = stack.pop()!;
       updateExpectedEnds(frame.start.keyword, -1);
       const content = frame.parts.join("");
-      const blockText = `${frame.openingRaw}${content}${token.raw}`;
+      const blockText = text.slice(frame.start.sourceStart, token.end);
       const blockId = markerAllocator.allocate(
         protectedMarkerKindForToken(token, !frame.start.inTag && !frame.start.inAttribute),
       );
@@ -691,7 +690,7 @@ export function parse(text: string): RootNode {
       continue;
     }
 
-    stack.push({ start: node, openingRaw: token.raw, parts: [], childIds: [] });
+    stack.push({ start: node, parts: [], childIds: [] });
     updateExpectedEnds(node.keyword, 1);
   }
 

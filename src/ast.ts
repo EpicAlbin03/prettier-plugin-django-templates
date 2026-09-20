@@ -14,6 +14,7 @@ export interface BaseNode {
   id: string;
   content: string;
   originalText: string;
+  preserveOriginalText?: boolean;
   preNewLines: number;
   readonly sourceStart: number;
   readonly sourceEnd: number;

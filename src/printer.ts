@@ -1297,6 +1297,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
             const markerContext = markerContexts.get(id);
             const sourceMarkerIndex = markerContext?.index ?? -1;
             if (ignoreDoc) {
+              currentNode.preserveOriginalText = true;
               return { doc: currentNode.originalText };
             }
 
@@ -1402,8 +1403,9 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
     const preservedReplacements: Array<{ token: string; value: string }> = [];
     let protectedFormatted = formatted;
     for (const child of Object.values(node.nodes)) {
-      const preservedText =
-        child.type === "raw-block"
+      const preservedText = child.preserveOriginalText
+        ? child.originalText
+        : child.type === "raw-block"
           ? getRawBlockText(child)
           : child.type === "ignore-region"
             ? child.originalText
