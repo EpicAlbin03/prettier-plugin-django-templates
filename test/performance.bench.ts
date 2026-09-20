@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { format, version as prettierVersion } from "prettier";
-import { beforeAll, expect, test } from "vitest";
+import { beforeAll, expect, test, type BenchResult } from "vitest";
 import * as plugin from "../dist/plugin.cjs";
 
-function positiveInteger(name, fallback) {
+function positiveInteger(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? fallback);
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${name} must be a positive safe integer.`);
@@ -26,7 +26,14 @@ const benchmarkOptions = {
 };
 // A full formatter ladder can take several minutes with the default sample minimum.
 const testOptions = { timeout: 600_000, concurrent: false };
-const parser = plugin.parsers["django-html"].parse;
+// SAFETY: the built plugin exposes src/parser.ts's synchronous, text-only parse function.
+// Prettier's Parser interface widens it to accept options and possibly return a promise.
+const parser = plugin.parsers["django-html"].parse as typeof import("../src/parser.js").parse;
+type ScaleOutput = ReturnType<typeof parser> | string;
+interface PreviousMeasurement {
+  bytes: number;
+  medianMs: number;
+}
 const formatOptions = { parser: "django-html", plugins: [plugin] };
 const corpusDirectory = new URL("./cases/performance/", import.meta.url);
 // Read/generate inputs outside measured callbacks. Sort for reproducible execution order.
@@ -46,7 +53,12 @@ beforeAll(() => {
   );
 });
 
-function measurement(name, bytes, result, previous) {
+function measurement(
+  name: string,
+  bytes: number,
+  result: BenchResult,
+  previous?: PreviousMeasurement,
+) {
   const medianMs = result.latency.p50;
   return {
     workload: name,
@@ -73,21 +85,26 @@ const generators = {
     `<main>${"<span>{% if value %}{{ value }}{% else %}empty{% endif %}</span>".repeat(size)}</main>`,
   "quoted-attribute": (size) =>
     `<div title="${"ordinary &amp; quoted content ".repeat(size)}{{ value }}">content</div>`,
-};
+} satisfies Record<string, (size: number) => string>;
 
-function scaleBenchmark(name, generate, operation, verify) {
+function scaleBenchmark(
+  name: string,
+  generate: (size: number) => string,
+  operation: (source: string) => ScaleOutput | Promise<ScaleOutput>,
+  verify: (output: ScaleOutput | undefined) => void,
+) {
   test(name, testOptions, async ({ bench }) => {
-    const rows = [];
-    let previous;
+    const rows: ReturnType<typeof measurement>[] = [];
+    let previous: PreviousMeasurement | undefined;
     for (const size of sizes) {
       const source = generate(size);
       const bytes = Buffer.byteLength(source, "utf8");
-      let output;
+      let output: ScaleOutput | undefined;
       // Preserve synchronous parser timing; an async wrapper would measure promise overhead.
       const run =
         operation === parser
           ? () => {
-              output = parser(source, { originalText: source });
+              output = parser(source);
             }
           : async () => {
               output = await operation(source);
@@ -106,15 +123,15 @@ for (const [name, generate] of Object.entries(generators)) {
   scaleBenchmark(`parse ${name}`, generate, parser, (output) => expect(output).toBeDefined());
 }
 
-const mixedHtml = (size) =>
+const mixedHtml = (size: number) =>
   `<main>${Array.from({ length: size }, (_, index) =>
     index % 2 === 0
       ? "<article><h2>{{ title }}</h2><p>ordinary content</p></article>"
       : "{% panel %}<section>{{ value }}</section>{% endpanel %}",
   ).join("\n")}</main>`;
-const plainHtml = (size) =>
+const plainHtml = (size: number) =>
   `<main>${"<article><h2>title</h2><p>ordinary content</p></article>".repeat(size)}</main>`;
-const expectFormatted = (output) => expect(output).toBeTypeOf("string");
+const expectFormatted = (output: ScaleOutput | undefined) => expect(output).toBeTypeOf("string");
 
 scaleBenchmark(
   "format mixed HTML",
@@ -138,7 +155,7 @@ scaleBenchmark(
 
 for (const { name, source } of corpus) {
   test(`format corpus ${name}`, testOptions, async ({ bench }) => {
-    let output;
+    let output: string | undefined;
     const result = await bench(name, async () => {
       output = await format(source, formatOptions);
     }).run(benchmarkOptions);
@@ -148,7 +165,7 @@ for (const { name, source } of corpus) {
 }
 
 test("format whole corpus (sequential)", testOptions, async ({ bench }) => {
-  let output;
+  let output: string | undefined;
   const bytes = corpus.reduce((total, entry) => total + Buffer.byteLength(entry.source, "utf8"), 0);
   const result = await bench(`${corpus.length} templates, bytes=${bytes}`, async () => {
     for (const { source } of corpus) {

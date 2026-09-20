@@ -5,6 +5,7 @@ const externalPrettier = /^prettier($|\/)/;
 export default defineConfig({
   test: {
     include: ["test/**/*.ts"],
+    exclude: ["test/**/*.bench.ts"],
   },
   staged: {
     "*": "vp check --fix",
