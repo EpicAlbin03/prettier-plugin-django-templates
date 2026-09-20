@@ -134,8 +134,12 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
     if (inTag && char === ">") {
       const tagText = source.slice(tagStart, offset + 1);
       const openingRawTextTag = tagText.match(/^<\s*(script|style)(?=[\s/>])/i)?.[1];
-      if (openingRawTextTag && !/\/\s*>$/.test(tagText)) {
-        rawTextElement = openingRawTextTag.toLowerCase() as "script" | "style";
+      const normalizedRawTextTag = openingRawTextTag?.toLowerCase();
+      if (
+        (normalizedRawTextTag === "script" || normalizedRawTextTag === "style") &&
+        !/\/\s*>$/.test(tagText)
+      ) {
+        rawTextElement = normalizedRawTextTag;
       }
       inTag = false;
       tagStart = -1;

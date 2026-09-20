@@ -1,6 +1,5 @@
 import { format, type Options } from "prettier";
 import { describe, expect, test } from "vitest";
-import type { RootNode } from "../src/ast.js";
 import * as DjangoPlugin from "../src/index.js";
 import { parse } from "../src/parser.js";
 
@@ -8,10 +7,6 @@ const prettierOptions: Options = {
   parser: "django-html",
   plugins: [DjangoPlugin],
 };
-
-async function parseTemplate(source: string): Promise<RootNode> {
-  return await (parse as unknown as (text: string) => RootNode | Promise<RootNode>)(source);
-}
 
 async function expectIdempotent(source: string): Promise<string> {
   const first = await format(source, prettierOptions);
@@ -23,7 +18,7 @@ describe("generated scale coverage", () => {
   test("protects thousands of expressions while retaining source spans", async () => {
     const count = 2_000;
     const source = Array.from({ length: count }, (_, index) => `{{ value_${index} }}`).join(" ");
-    const root = await parseTemplate(source);
+    const root = parse(source);
     const expressions = Object.values(root.nodes).filter((node) => node.type === "expression");
 
     expect(expressions).toHaveLength(count);
@@ -61,14 +56,14 @@ describe("generated scale coverage", () => {
   test("keeps deep and large malformed inputs deterministic", async () => {
     const depth = 80;
     const nested = `${"{% if value %}".repeat(depth)}{{ value }}${"{% endif %}".repeat(depth)}`;
-    const nestedRoot = await parseTemplate(nested);
+    const nestedRoot = parse(nested);
     expect(
       Object.values(nestedRoot.nodes).filter((node) => node.type === "template-block"),
     ).toHaveLength(depth);
 
     const malformed = `${"{% if value %}\n".repeat(1_000)}{{ tail }}`;
-    const first = await parseTemplate(malformed);
-    const second = await parseTemplate(malformed);
+    const first = parse(malformed);
+    const second = parse(malformed);
     expect(first.content).toBe(second.content);
     expect(Object.values(first.nodes).filter((node) => node.type === "template-tag")).toHaveLength(
       1_000,

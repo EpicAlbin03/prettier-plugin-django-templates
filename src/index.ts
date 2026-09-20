@@ -14,21 +14,21 @@ const languages: SupportLanguage[] = [
   },
 ];
 
-const parsers = {
+const parsers: Record<typeof PLUGIN_KEY, Parser<DjangoNode>> = {
   [PLUGIN_KEY]: {
     astFormat: PLUGIN_KEY,
     parse,
     locStart: (node) => node.sourceStart,
     locEnd: (node) => node.sourceEnd,
-  } as Parser<DjangoNode>,
+  },
 };
 
-const printers = {
+const printers: Record<typeof PLUGIN_KEY, Printer<DjangoNode>> = {
   [PLUGIN_KEY]: {
     print,
     embed,
     getVisitorKeys,
-  } as Printer<DjangoNode>,
+  },
 };
 
 const options = {};

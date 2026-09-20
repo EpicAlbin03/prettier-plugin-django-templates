@@ -6,21 +6,22 @@ import {
   escapeMarkerForRegExp,
   INLINE_MARKER_SOURCE,
   InternalMarkerAllocator,
+  type InternalMarkerKind,
   TEMPORARY_RUN_MARKER_SOURCE,
 } from "../src/internal-markers.js";
 
-const markerSources = {
-  inline: INLINE_MARKER_SOURCE,
-  block: BLOCK_MARKER_SOURCE,
-  attr: ATTRIBUTE_MARKER_SOURCE,
-  "temporary-run": TEMPORARY_RUN_MARKER_SOURCE,
-} as const;
+const markerSources: Array<[InternalMarkerKind, string]> = [
+  ["inline", INLINE_MARKER_SOURCE],
+  ["block", BLOCK_MARKER_SOURCE],
+  ["attr", ATTRIBUTE_MARKER_SOURCE],
+  ["temporary-run", TEMPORARY_RUN_MARKER_SOURCE],
+];
 
 describe("internal marker ownership", () => {
-  test.each(Object.entries(markerSources))(
+  test.each(markerSources)(
     "recognizes every generated %s marker through the authoritative syntax",
     (kind, source) => {
-      const marker = new InternalMarkerAllocator("").allocate(kind as keyof typeof markerSources);
+      const marker = new InternalMarkerAllocator("").allocate(kind);
       expect(marker).toMatch(new RegExp(`^(?:${source})$`));
       expect(containsBlockMarker(marker)).toBe(kind === "block");
     },

@@ -306,8 +306,8 @@ export function startsDocumentFlowAfterTag(name: string): boolean {
     return false;
   }
 
-  const branchNames = [...descriptors]
-    .filter(([, descriptor]) => descriptor.role === "branch")
-    .map(([branchName]) => branchName);
+  const branchNames = [...descriptors].flatMap(([branchName, descriptor]) =>
+    descriptor.role === "branch" ? [branchName] : [],
+  );
   return branchNames.every((branchName) => !name.startsWith(branchName));
 }

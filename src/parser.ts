@@ -1,4 +1,3 @@
-import type { Parser } from "prettier";
 import { scanHtmlHostContexts } from "./html-host-context.js";
 import { InternalMarkerAllocator } from "./internal-markers.js";
 import {
@@ -456,7 +455,7 @@ interface OpenBlock {
   childIds: string[];
 }
 
-export const parse: Parser<DjangoNode>["parse"] = (text) => {
+export function parse(text: string): RootNode {
   const tokens = tokenize(text);
   const standaloneTagsWithLaterEnds = getStandaloneTagsWithLaterEnds(tokens);
   const nodes: Record<string, DjangoNode> = {};
@@ -705,4 +704,4 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
 
   root.content = rootParts.join("");
   return root;
-};
+}

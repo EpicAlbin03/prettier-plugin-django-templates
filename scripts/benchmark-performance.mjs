@@ -85,9 +85,7 @@ const elapsedSeconds = (performance.now() - benchmarkStartedAt) / 1_000;
 console.log(`\nSummary: ${results.length} measurements completed in ${elapsedSeconds.toFixed(1)}s`);
 for (const operation of ["parse", "format"]) {
   const names = [
-    ...new Set(
-      results.filter((result) => result.operation === operation).map((result) => result.name),
-    ),
+    ...new Set(results.flatMap((result) => (result.operation === operation ? [result.name] : []))),
   ];
   for (const name of names) {
     const group = results.filter(

@@ -1,6 +1,6 @@
 import { format } from "prettier";
 import { describe, expect, test } from "vitest";
-import type { DjangoNode, RootNode } from "../src/ast.js";
+import type { DjangoNode } from "../src/ast.js";
 import { scanHtmlHostContexts, type HtmlHostContext } from "../src/html-host-context.js";
 import * as DjangoPlugin from "../src/index.js";
 import { parse } from "../src/parser.js";
@@ -120,8 +120,7 @@ describe("HTML host context scanner", () => {
     const afterOffset = offsetOf(source, "{{ after");
     expect(contexts.at(afterOffset)).toBe("document-flow");
 
-    const parseSource = parse as unknown as (text: string) => RootNode | Promise<RootNode>;
-    const root = await parseSource(source);
+    const root = parse(source);
     const after = Object.values(root.nodes).find(
       (node) => node.type === "expression" && node.content.trim() === "after",
     );
@@ -150,8 +149,7 @@ describe("HTML host context scanner", () => {
     const source =
       '<div {{ attrs }} title="{{ label }}{% if suffix %}-{{ suffix }}{% endif %}"><script>const html = "<fake>"; {{ payload }}</script></div>';
     const contexts = scanHtmlHostContexts(source);
-    const parseSource = parse as unknown as (text: string) => RootNode | Promise<RootNode>;
-    const root = await parseSource(source);
+    const root = parse(source);
     const contextForNode = (node: DjangoNode): HtmlHostContext =>
       node.inAttribute ? "attribute-value" : node.inTag ? "start-tag" : "document-flow";
 

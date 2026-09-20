@@ -1,6 +1,5 @@
 import { format } from "prettier";
 import { describe, expect, test } from "vitest";
-import type { RootNode } from "../src/ast.js";
 import * as DjangoPlugin from "../src/index.js";
 import { parse } from "../src/parser.js";
 import {
@@ -24,11 +23,6 @@ const formatTemplate = (source: string) =>
 
 const descriptors = getTagDescriptors();
 
-async function parseTemplate(source: string): Promise<RootNode> {
-  const parseSource = parse as unknown as (text: string) => RootNode | Promise<RootNode>;
-  return await parseSource(source);
-}
-
 describe("template tag descriptor registry", () => {
   test("classifies every descriptor through its authoritative role", () => {
     for (const [name, descriptor] of descriptors) {
@@ -37,16 +31,13 @@ describe("template tag descriptor registry", () => {
 
     const namesByRole = {
       start: [...descriptors]
-        .filter(([, descriptor]) => descriptor.role === "start")
-        .map(([name]) => name)
+        .flatMap(([name, descriptor]) => (descriptor.role === "start" ? [name] : []))
         .sort(),
       branch: [...descriptors]
-        .filter(([, descriptor]) => descriptor.role === "branch")
-        .map(([name]) => name)
+        .flatMap(([name, descriptor]) => (descriptor.role === "branch" ? [name] : []))
         .sort(),
       standalone: [...descriptors]
-        .filter(([, descriptor]) => descriptor.role === "standalone")
-        .map(([name]) => name)
+        .flatMap(([name, descriptor]) => (descriptor.role === "standalone" ? [name] : []))
         .sort(),
     };
     expect(namesByRole).toMatchInlineSnapshot(`
@@ -176,9 +167,9 @@ describe("template tag descriptor registry", () => {
     ["empty", ["for"]],
     ["plural", ["blocktranslate", "blocktrans"]],
   ])("defines the complete %s parent matrix", (branch, parents) => {
-    const startNames = [...descriptors]
-      .filter(([, descriptor]) => descriptor.role === "start")
-      .map(([name]) => name);
+    const startNames = [...descriptors].flatMap(([name, descriptor]) =>
+      descriptor.role === "start" ? [name] : [],
+    );
 
     for (const parent of startNames) {
       expect(isPermittedBranch(parent, branch), `${branch} in ${parent}`).toBe(
@@ -189,7 +180,7 @@ describe("template tag descriptor registry", () => {
   });
 
   test("owns raw-body, flow, and start-tag formatting behavior", () => {
-    expect([...descriptors].filter(([name]) => isRawBodyTag(name)).map(([name]) => name)).toEqual([
+    expect([...descriptors].flatMap(([name]) => (isRawBodyTag(name) ? [name] : []))).toEqual([
       "comment",
       "verbatim",
     ]);
@@ -247,7 +238,7 @@ describe("custom and ecosystem tag regressions", () => {
       ["{% panel_custom_end %}x{% panelend %}", "panelend"],
       ["{% dnd_panel %}x{% end_dnd_panel %}", "end_dnd_panel"],
     ]) {
-      const root = await parseTemplate(source);
+      const root = parse(source);
       const block = Object.values(root.nodes).find((node) => node.type === "template-block");
       expect(block?.type).toBe("template-block");
       if (block?.type === "template-block") {

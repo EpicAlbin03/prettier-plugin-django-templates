@@ -1,9 +1,9 @@
 import { existsSync, readdirSync, readFileSync } from "fs";
-import { format } from "prettier";
+import { format, type Options } from "prettier";
 import { test } from "vitest";
 import * as DjangoPlugin from "../../src/index.js";
 
-const prettify = (code: string, options: Record<string, unknown>) =>
+const prettify = (code: string, options: Options) =>
   format(code, {
     parser: "django-html",
     plugins: [DjangoPlugin],

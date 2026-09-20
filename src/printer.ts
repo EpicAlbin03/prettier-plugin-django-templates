@@ -37,9 +37,9 @@ function getProtectedMarkerIds(
     return node.childIds;
   }
 
-  return [...node.content.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))]
-    .map((match) => match[0])
-    .filter((id) => Boolean(node.nodes[id]));
+  return [...node.content.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))].flatMap((match) =>
+    node.nodes[match[0]] ? [match[0]] : [],
+  );
 }
 
 function markerEntries(
@@ -816,7 +816,8 @@ function getCompactSingleElementBlockDoc(block: TemplateBlockNode): Doc | undefi
   }
 
   const marker = preserved.match(new RegExp(INLINE_MARKER_SOURCE))?.[0];
-  if (!marker || block.nodes[marker]?.type !== "expression") {
+  const expression = marker ? block.nodes[marker] : undefined;
+  if (!marker || expression?.type !== "expression") {
     return undefined;
   }
 
@@ -824,7 +825,7 @@ function getCompactSingleElementBlockDoc(block: TemplateBlockNode): Doc | undefi
   return [
     printTemplateTag(block.start),
     preserved.slice(0, markerIndex),
-    formatExpression(block.nodes[marker] as ExpressionNode),
+    formatExpression(expression),
     preserved.slice(markerIndex + marker.length),
     printTemplateTag(block.end),
   ];
@@ -1139,13 +1140,7 @@ function normalizeHtmlAroundProtectedMarkers(currentDoc: string): string {
     );
 }
 
-function prepareSegmentForHtml(
-  segment: string,
-  markerAllocator: InternalMarkerAllocator,
-): {
-  segment: string;
-  beforeReplacements: Array<{ token: string; value: string }>;
-} {
+function prepareSegmentForHtml(segment: string, markerAllocator: InternalMarkerAllocator) {
   const beforeReplacements: Array<{ token: string; value: string }> = [];
 
   let prepared = segment.replace(
@@ -1223,6 +1218,8 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
         gapAfter: next && /^[ \t]+$/.test(betweenNext ?? "") ? betweenNext : undefined,
       });
     }
+    // Prettier's public Options type leaves plugin-owned fields unknown, so validate this boundary.
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof
     if (typeof options.originalText !== "string") {
       throw new TypeError("Prettier did not provide the complete original source.");
     }
@@ -1277,6 +1274,8 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
         let ignoreDoc = false;
 
         return mapDoc(doc, (currentDoc) => {
+          // A Prettier Doc is a documented union with strings as its only text representation.
+          // oxlint-disable-next-line anti-slop/no-runtime-typeof
           if (typeof currentDoc !== "string") {
             return currentDoc;
           }
@@ -1400,7 +1399,11 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       endsWithUnclosedIgnoreRegion;
     const { formatted } = printDocToString(
       [joined, endsWithUnclosedPreservedRegion ? "" : builders.hardline],
-      options as Parameters<typeof printDocToString>[1],
+      {
+        printWidth: options.printWidth ?? 80,
+        tabWidth: options.tabWidth ?? 2,
+        useTabs: options.useTabs,
+      },
     );
 
     const preservedReplacements: Array<{ token: string; value: string }> = [];
