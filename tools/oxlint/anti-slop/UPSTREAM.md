@@ -10,7 +10,6 @@ Installed paths:
 - `tools/oxlint/anti-slop/rules/`
 - `tools/oxlint/anti-slop/shared/`
 - `tools/oxlint/anti-slop/vendor/`
-- `tools/oxlint/anti-slop/effect/` (bundled but not registered)
 
 Intentional deviations:
 
