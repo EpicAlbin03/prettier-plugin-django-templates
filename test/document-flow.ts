@@ -15,7 +15,9 @@ test("generic document-flow docs preserve whitespace-sensitive token order", asy
 
   expect(semanticTokens(formatted)).toEqual(semanticTokens(source));
   expect(formatted).toMatch(/before\s+{% custom_asset %}\s+after/);
-  expect(formatted).toContain("{% if show %}<ol>{{ descendants }}</ol>{% endif %}");
+  expect(formatted).toContain(
+    "{% if show %}\n      <ol>\n        {{ descendants }}\n      </ol>\n    {% endif %}",
+  );
   expect(await formatTemplate(formatted)).toBe(formatted);
 });
 

@@ -2,7 +2,11 @@
 {% recursetree nodes %}
   <li>
     {{ node.name }}
-    {% if not node.is_leaf_node %}<ul>{{ children }}</ul>{% endif %}
+    {% if not node.is_leaf_node %}
+      <ul>
+        {{ children }}
+      </ul>
+    {% endif %}
   </li>
 {% endrecursetree %}
 {% drilldown_tree_for_node node as drilldown %}

@@ -103,36 +103,6 @@ function hasHtmlMarkup(content: string): boolean {
   return /<(?!!--)[A-Za-z/!][^>]*>/.test(content);
 }
 
-function getPreservedSingleLineHtmlSegment(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string,
-): string | undefined {
-  const trimmedSegment = segment.trimEnd();
-  if (trimmedSegment.includes("\n")) {
-    return undefined;
-  }
-
-  const match = trimmedSegment.match(/^<([A-Za-z][^\s/>]*)(?<attrs>[^>]*)>(?<body>[^<]*)<\/\1>$/);
-  if (!match?.groups) {
-    return undefined;
-  }
-
-  const attrAssignments = (match.groups.attrs.match(/=\s*"[^"]*"/g) ?? []).length;
-  if (attrAssignments > 1) {
-    return undefined;
-  }
-
-  const bodyProtectedMarkers = match.groups.body.match(new RegExp(INLINE_MARKER_SOURCE, "g")) ?? [];
-  if (bodyProtectedMarkers.length !== 1 || match.groups.body.trim() !== bodyProtectedMarkers[0]) {
-    return undefined;
-  }
-
-  const segmentNodes = markerEntries(trimmedSegment, node.nodes).map(({ id }) => node.nodes[id]);
-  return segmentNodes.every((entry) => entry.protectedMarkerKind === "inline")
-    ? trimmedSegment
-    : undefined;
-}
-
 function findHtmlTagEnd(content: string, tagStart: number): number | undefined {
   let quote: '"' | "'" | undefined;
   for (let cursor = tagStart + 1; cursor < content.length; cursor += 1) {
@@ -520,25 +490,30 @@ function isSingleElementStandaloneTag(
   segment: string,
 ): boolean {
   const preserved = segment.trimEnd();
-  if (preserved.includes("\n")) {
-    return false;
-  }
-
   const [match] = findInlineOnlyStandaloneElements(node, preserved);
   return Boolean(match && match.index === 0 && match.text === preserved);
 }
 
-function getWhitespaceSensitiveInlineElementDoc(
+function getWhitespaceSensitiveInlineBody(
   node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
   segment: string,
-): Doc | undefined {
+): { start: number; end: number } | undefined {
   const preserved = segment.trimEnd();
-  if (preserved.includes("\n") || preserved.includes("\r")) {
+  const match = preserved.match(/^<([A-Za-z][^\s/>]*)/);
+  const closing = preserved.match(/<\/([A-Za-z][^\s/>]*)\s*>$/);
+  const openingEnd = findHtmlTagEnd(preserved, 0);
+  if (
+    !match ||
+    openingEnd === undefined ||
+    BLOCK_FLOW_ELEMENTS.has(match[1].toLowerCase()) ||
+    /^(script|style|pre|textarea)$/i.test(match[1]) ||
+    closing?.[1] !== match[1]
+  ) {
     return undefined;
   }
 
-  const match = preserved.match(/^<([A-Za-z][^\s/>]*)(?:[^>]*)>([\s\S]*)<\/\1>$/);
-  if (!match || BLOCK_FLOW_ELEMENTS.has(match[1].toLowerCase())) {
+  const body = preserved.slice(openingEnd + 1, preserved.length - closing[0].length);
+  if (hasHtmlMarkup(body) || /[\r\n]/.test(body)) {
     return undefined;
   }
 
@@ -557,45 +532,7 @@ function getWhitespaceSensitiveInlineElementDoc(
     return undefined;
   }
 
-  const parts: Doc[] = [];
-  let cursor = 0;
-  for (const { id, index } of entries) {
-    parts.push(preserved.slice(cursor, index));
-    const child = node.nodes[id];
-    parts.push(child.type === "expression" ? formatExpression(child) : child.originalText);
-    cursor = index + id.length;
-  }
-  parts.push(preserved.slice(cursor));
-  return parts;
-}
-
-function getSingleElementStandaloneTagDoc(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string,
-): Doc | undefined {
-  const preserved = segment.trimEnd();
-  if (preserved.includes("\n")) {
-    return undefined;
-  }
-
-  const [match] = findInlineOnlyStandaloneElements(node, preserved);
-  const child = match ? node.nodes[match.marker] : undefined;
-  if (
-    !match ||
-    match.index !== 0 ||
-    match.text !== preserved ||
-    child?.type !== "template-tag" ||
-    child.protectedMarkerKind !== "block"
-  ) {
-    return undefined;
-  }
-
-  const markerIndex = preserved.indexOf(match.marker);
-  return [
-    preserved.slice(0, markerIndex),
-    printTemplateTag(child),
-    preserved.slice(markerIndex + match.marker.length),
-  ];
+  return { start: openingEnd + 1, end: preserved.length - closing[0].length };
 }
 
 function isStandaloneDocumentFlowTemplateTag(
@@ -789,32 +726,6 @@ function getStartTagTemplateBlockDoc(
   }
 
   return docs;
-}
-
-function getCompactSingleElementBlockDoc(block: TemplateBlockNode): Doc | undefined {
-  if (block.originalText.includes("\n") || block.originalText.includes("\r")) {
-    return undefined;
-  }
-
-  const preserved = getPreservedSingleLineHtmlSegment(block, block.content);
-  if (!preserved) {
-    return undefined;
-  }
-
-  const marker = preserved.match(new RegExp(INLINE_MARKER_SOURCE))?.[0];
-  const expression = marker ? block.nodes[marker] : undefined;
-  if (!marker || expression?.type !== "expression") {
-    return undefined;
-  }
-
-  const markerIndex = preserved.indexOf(marker);
-  return [
-    printTemplateTag(block.start),
-    preserved.slice(0, markerIndex),
-    formatExpression(expression),
-    preserved.slice(markerIndex + marker.length),
-    printTemplateTag(block.end),
-  ];
 }
 
 const HTML_VOID_ELEMENTS = new Set([
@@ -1246,10 +1157,38 @@ function normalizeHtmlAroundProtectedMarkers(currentDoc: string): string {
     );
 }
 
-function prepareSegmentForHtml(segment: string, markerAllocator: InternalMarkerAllocator) {
+function prepareSegmentForHtml(
+  node: RootNode | TemplateBlockNode,
+  segment: string,
+  markerAllocator: InternalMarkerAllocator,
+) {
   const beforeReplacements: Array<{ token: string; value: string }> = [];
+  // Protect only the sensitive body or standalone construct. The surrounding HTML
+  // must still reach Prettier so quote, spacing, width, and attribute options apply.
+  let protectedSegment = segment;
+  const sensitiveBody = getWhitespaceSensitiveInlineBody(node, segment);
+  const standalone = isSingleElementStandaloneTag(node, segment)
+    ? findInlineOnlyStandaloneElements(node, segment)[0]
+    : undefined;
+  const protectedRange =
+    sensitiveBody ??
+    (standalone
+      ? {
+          start: segment.indexOf(standalone.marker),
+          end: segment.indexOf(standalone.marker) + standalone.marker.length,
+        }
+      : undefined);
+  if (protectedRange) {
+    const token = markerAllocator.allocate("inline");
+    beforeReplacements.push({
+      token,
+      value: segment.slice(protectedRange.start, protectedRange.end),
+    });
+    protectedSegment =
+      segment.slice(0, protectedRange.start) + token + segment.slice(protectedRange.end);
+  }
 
-  let prepared = segment.replace(
+  let prepared = protectedSegment.replace(
     new RegExp(`((${PROTECTED_MARKER_SOURCE})(?:[ \\t]+${PROTECTED_MARKER_SOURCE})+)`, "g"),
     (run) => {
       if (containsBlockMarker(run)) {
@@ -1276,7 +1215,12 @@ function prepareSegmentForHtml(segment: string, markerAllocator: InternalMarkerA
           : match,
     );
 
-  return { segment: prepared, beforeReplacements };
+  return {
+    segment: prepared,
+    beforeReplacements,
+    standaloneMarker: standalone?.marker,
+    sensitiveBody,
+  };
 }
 
 // Root and template blocks share this dictionary. Weak ownership keeps separate format
@@ -1405,19 +1349,16 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
         : splitSegments;
     const mapped = await Promise.all(
       segments.map(async (segment) => {
-        const preservedSegment = getPreservedSingleLineHtmlSegment(node, segment);
-        const whitespaceSensitiveInlineDoc = getWhitespaceSensitiveInlineElementDoc(node, segment);
-        const singleElementStandaloneTagDoc = getSingleElementStandaloneTagDoc(node, segment);
-        const preparedSegment = prepareSegmentForHtml(segment, markerAllocator);
+        const preparedSegment = prepareSegmentForHtml(node, segment, markerAllocator);
         const doc = node.nodes[segment]
           ? segment
-          : (whitespaceSensitiveInlineDoc ??
-            singleElementStandaloneTagDoc ??
-            preservedSegment ??
-            (await textToDoc(preparedSegment.segment, {
+          : await textToDoc(preparedSegment.segment, {
               ...options,
               parser: "html",
-            })));
+              htmlWhitespaceSensitivity: preparedSegment.sensitiveBody
+                ? "strict"
+                : options.htmlWhitespaceSensitivity,
+            });
 
         let ignoreDoc = false;
 
@@ -1456,6 +1397,10 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
 
           return replaceProtectedMarkersInString(currentDoc, node.nodes, (id, context) => {
             const currentNode = node.nodes[id];
+            // This construct is the entire element body, not a document-flow boundary.
+            if (id === preparedSegment.standaloneMarker && currentNode.type === "template-tag") {
+              return { doc: printTemplateTag(currentNode) };
+            }
             const markerContext = markerContexts.get(id);
             const sourceMarkerIndex = markerContext?.index ?? -1;
             // Block layout whitespace becomes rendered text in inline HTML, with or
@@ -1475,10 +1420,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               hasSafeSingleBlockElementBody(currentNode) &&
               hasAdjacentInlineExpressionBefore(node, markerContext?.previousId) &&
               hostContexts.elementAt(sourceMarkerIndex) !== undefined;
-            const compactNestedBlock = followsInlineExpressionInElement
-              ? getCompactSingleElementBlockDoc(currentNode)
-              : undefined;
-            const rendered = compactNestedBlock ?? path.call(print, "nodes", id);
+            const rendered = path.call(print, "nodes", id);
             const leadingSpacing = getStandaloneLeadingSpacing(
               node,
               currentNode,
