@@ -874,6 +874,7 @@ const BLOCK_FLOW_ELEMENTS = new Set([
   "nav",
   "ol",
   "section",
+  "select",
   "table",
   "tbody",
   "td",
@@ -1234,34 +1235,8 @@ function restoreInlineProtectedMarkerRuns(currentDoc: string, pairs: Set<string>
   return parts.join("");
 }
 
-function hasTemplateBranches(block: TemplateBlockNode): boolean {
-  return block.childIds.some((id) => {
-    const child = block.nodes[id];
-    return child.type === "template-block"
-      ? hasTemplateBranches(child)
-      : child.type === "template-tag" && child.role === "branch";
-  });
-}
-
-function isInsideInlineHtmlElement(value: string, offset: number): boolean {
-  const stack: string[] = [];
-  for (const tag of value
-    .slice(0, offset)
-    .matchAll(/<\/?([A-Za-z][A-Za-z0-9:-]*)(?:\s[^<>]*?)?\s*\/?>/g)) {
-    const text = tag[0];
-    const name = tag[1].toLowerCase();
-    if (text.startsWith("</")) {
-      const matchingIndex = stack.lastIndexOf(name);
-      if (matchingIndex !== -1) {
-        stack.length = matchingIndex;
-      }
-    } else if (!text.endsWith("/>") && !HTML_VOID_ELEMENTS.has(name)) {
-      stack.push(name);
-    }
-  }
-
-  const currentElement = stack.at(-1);
-  return Boolean(currentElement && !BLOCK_FLOW_ELEMENTS.has(currentElement));
+function isInlineHtmlElement(name: string | undefined): boolean {
+  return Boolean(name && !BLOCK_FLOW_ELEMENTS.has(name));
 }
 
 // This legacy generic pass handles unrelated document-flow boundaries. Whitespace-sensitive inline
@@ -1279,7 +1254,7 @@ function normalizeAdjacentDocumentFlowConstructs(value: string): string {
     return !isFormattingBoundary ||
       hostContexts.at(offset) !== "document-flow" ||
       !hostContexts.isDocumentFlowNormalizationSafeAt(offset) ||
-      isInsideInlineHtmlElement(value, offset)
+      isInlineHtmlElement(hostContexts.elementAt(offset))
       ? boundary
       : `${boundary}\n`;
   });
@@ -1381,6 +1356,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
         : node.originalText;
     }
 
+    const hostContexts = scanHtmlHostContexts(node.content);
     const containerHasHtmlMarkup = hasHtmlMarkup(node.content);
     const inlineProtectedMarkerPairs = getInlineProtectedMarkerPairs(node.content);
     const sourceMarkerEntries = markerEntries(node.content, node.nodes);
@@ -1500,15 +1476,14 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
             const currentNode = node.nodes[id];
             const markerContext = markerContexts.get(id);
             const sourceMarkerIndex = markerContext?.index ?? -1;
-            // Branch separators belong to rendered text in inline HTML. Preserve the
-            // whole block, including nested branches, rather than adding layout whitespace.
-            const preserveInlineBranches =
+            // Block layout whitespace becomes rendered text in inline HTML, with or
+            // without branches. Keep the block's original whitespace in this context.
+            const preserveInlineBlock =
               currentNode.type === "template-block" &&
               !currentNode.inTag &&
               !currentNode.inAttribute &&
-              isInsideInlineHtmlElement(node.content, sourceMarkerIndex) &&
-              hasTemplateBranches(currentNode);
-            if (ignoreDoc || preserveInlineBranches || currentNode.preserveOriginalText) {
+              isInlineHtmlElement(hostContexts.elementAt(sourceMarkerIndex));
+            if (ignoreDoc || preserveInlineBlock || currentNode.preserveOriginalText) {
               currentNode.preserveOriginalText = true;
               return { doc: currentNode.originalText };
             }

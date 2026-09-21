@@ -20,6 +20,18 @@ function offsetOf(source: string, needle: string, occurrence = 0): number {
 }
 
 describe("HTML host context scanner", () => {
+  test.each([
+    '<span title="<div>">marker</span>',
+    "<span title='<div>'>marker</span>",
+    "<span><!-- <div> -->marker</span>",
+    '<span><script>"<div>"</script>marker</span>',
+    "<span><br>marker</span>",
+  ])("tracks enclosing elements without reading quoted or raw markup: %s", (source) => {
+    const contexts = scanHtmlHostContexts(source);
+    expect(contexts.elementAt(source.indexOf("marker"))).toBe("span");
+    expect(contexts.elementAt(source.length)).toBeUndefined();
+  });
+
   test.each<{ name: string; source: string; expected: ExpectedContext[] }>([
     {
       name: "document flow and tag boundaries",

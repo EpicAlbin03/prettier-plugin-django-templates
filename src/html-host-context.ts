@@ -6,7 +6,25 @@ export interface HtmlHostContextIndex {
   at(offset: number): HtmlHostContext;
   isDocumentFlowNormalizationSafeAt(offset: number): boolean;
   isPreformattedAt(offset: number): boolean;
+  elementAt(offset: number): string | undefined;
 }
+
+const HTML_VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
 
 const DOCUMENT_FLOW = 0;
 const START_TAG = 1;
@@ -74,6 +92,8 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
   const preformatted = new Uint8Array(source.length);
   let preformattedStart: number | undefined;
   let preDepth = 0;
+  const elements: string[] = [];
+  const elementChanges: Array<{ offset: number; name: string | undefined }> = [];
 
   for (let offset = 0; offset < source.length; offset += 1) {
     const context = quote ? ATTRIBUTE_VALUE : inTag ? START_TAG : DOCUMENT_FLOW;
@@ -153,6 +173,19 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
 
     if (inTag && char === ">") {
       const tagText = source.slice(tagStart, offset + 1);
+      const tag = tagText.match(/^<\s*(\/?)\s*([A-Za-z][A-Za-z0-9:-]*)/);
+      if (tag) {
+        const name = tag[2].toLowerCase();
+        if (tag[1] === "/") {
+          const matchingIndex = elements.lastIndexOf(name);
+          if (matchingIndex !== -1) {
+            elements.length = matchingIndex;
+          }
+        } else if (!/\/\s*>$/.test(tagText) && !HTML_VOID_ELEMENTS.has(name)) {
+          elements.push(name);
+        }
+        elementChanges.push({ offset: offset + 1, name: elements.at(-1) });
+      }
       const openingRawTextTag = tagText.match(/^<\s*(script|style|textarea)(?=[\s/>])/i)?.[1];
       const normalizedRawTextTag = openingRawTextTag?.toLowerCase();
       if (
@@ -199,6 +232,19 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
     },
     isPreformattedAt(offset: number): boolean {
       return preformatted[offset] === 1;
+    },
+    elementAt(offset: number): string | undefined {
+      let low = 0;
+      let high = elementChanges.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (elementChanges[middle].offset <= offset) {
+          low = middle + 1;
+        } else {
+          high = middle;
+        }
+      }
+      return elementChanges[low - 1]?.name;
     },
   };
 }
