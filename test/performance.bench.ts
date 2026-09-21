@@ -12,19 +12,19 @@ function positiveInteger(name: string, fallback: number): number {
 }
 
 const requestedMax = positiveInteger("BENCHMARK_MAX", 16_000);
-const samples = positiveInteger("BENCHMARK_SAMPLES", 20);
+const minimumSamples = positiveInteger("BENCHMARK_SAMPLES", 1);
 // Bound adversarial allocations, rather than making noisy latency numbers a CI gate.
 if (requestedMax < 1_000 || requestedMax > 16_000) {
   throw new Error("BENCHMARK_MAX must be between 1000 and 16000.");
 }
 const sizes = [1_000, 2_000, 4_000, 8_000, 16_000].filter((size) => size <= requestedMax);
 const benchmarkOptions = {
-  iterations: samples,
+  iterations: minimumSamples,
   time: 250,
-  warmupIterations: 5,
+  warmupIterations: 1,
   warmupTime: 100,
 };
-// A full formatter ladder can take several minutes with the default sample minimum.
+// A full formatter ladder can take several minutes with an increased sample minimum.
 const testOptions = { timeout: 600_000, concurrent: false };
 // SAFETY: the built plugin exposes src/parser.ts's synchronous, text-only parse function.
 // Prettier's Parser interface widens it to accept options and possibly return a promise.
@@ -48,8 +48,8 @@ if (corpus.length === 0) {
 beforeAll(() => {
   console.info(
     `Warm-process benchmark: Node ${process.version}, ${process.platform}/${process.arch}, ` +
-      `Prettier ${prettierVersion}; minimum ${samples} samples / 250 ms, ` +
-      "warmup 5 iterations / 100 ms per workload. Times exclude input generation and imports.",
+      `Prettier ${prettierVersion}; minimum ${minimumSamples} samples / 250 ms, ` +
+      "warmup 1 iteration / 100 ms per workload. Times exclude input generation and imports.",
   );
 });
 
