@@ -1035,28 +1035,6 @@ function hasAdjacentInlineExpressionBefore(
   return previousId ? container.nodes[previousId]?.type === "expression" : false;
 }
 
-function isInsideHtmlElement(content: string, markerIndex: number): boolean {
-  const stack: string[] = [];
-  const tags = content
-    .slice(0, markerIndex)
-    .matchAll(/<\/?([A-Za-z][A-Za-z0-9:-]*)(?:\s[^<>]*?)?\s*\/?>/g);
-
-  for (const tag of tags) {
-    const text = tag[0];
-    const name = tag[1].toLowerCase();
-    if (text.startsWith("</")) {
-      const matchingIndex = stack.lastIndexOf(name);
-      if (matchingIndex !== -1) {
-        stack.length = matchingIndex;
-      }
-    } else if (!text.endsWith("/>") && !HTML_VOID_ELEMENTS.has(name)) {
-      stack.push(name);
-    }
-  }
-
-  return stack.length > 0;
-}
-
 function buildBlock(
   path: AstPath<DjangoNode>,
   print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
@@ -1301,6 +1279,23 @@ function prepareSegmentForHtml(segment: string, markerAllocator: InternalMarkerA
   return { segment: prepared, beforeReplacements };
 }
 
+// Root and template blocks share this dictionary. Weak ownership keeps separate format
+// calls isolated and releases the allocator with the AST, including all temporary markers.
+const documentMarkerAllocators = new WeakMap<Record<string, DjangoNode>, InternalMarkerAllocator>();
+
+function getDocumentMarkerAllocator(
+  nodes: Record<string, DjangoNode>,
+  originalText: string,
+): InternalMarkerAllocator {
+  let allocator = documentMarkerAllocators.get(nodes);
+  if (!allocator) {
+    allocator = new InternalMarkerAllocator(originalText);
+    allocator.reserve(Object.keys(nodes));
+    documentMarkerAllocators.set(nodes, allocator);
+  }
+  return allocator;
+}
+
 export const embed: Printer<DjangoNode>["embed"] = () => {
   return async (
     textToDoc: (text: string, options: Options) => Promise<Doc>,
@@ -1327,8 +1322,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
     if (typeof options.originalText !== "string") {
       throw new TypeError("Prettier did not provide the complete original source.");
     }
-    const markerAllocator = new InternalMarkerAllocator(options.originalText);
-    markerAllocator.reserve(Object.keys(node.nodes));
+    const markerAllocator = getDocumentMarkerAllocator(node.nodes, options.originalText);
     if (
       !node.inTag &&
       !node.inAttribute &&
@@ -1480,7 +1474,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               currentNode.type === "template-block" &&
               hasSafeSingleBlockElementBody(currentNode) &&
               hasAdjacentInlineExpressionBefore(node, markerContext?.previousId) &&
-              isInsideHtmlElement(node.content, sourceMarkerIndex);
+              hostContexts.elementAt(sourceMarkerIndex) !== undefined;
             const compactNestedBlock = followsInlineExpressionInElement
               ? getCompactSingleElementBlockDoc(currentNode)
               : undefined;

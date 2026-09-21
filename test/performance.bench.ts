@@ -134,6 +134,13 @@ const plainHtml = (size: number) =>
 const expectFormatted = (output: ScaleOutput | undefined) => expect(output).toBeTypeOf("string");
 
 scaleBenchmark(
+  "format sibling blocks",
+  generators.siblings,
+  (source) => format(source, formatOptions),
+  expectFormatted,
+);
+
+scaleBenchmark(
   "format mixed HTML",
   mixedHtml,
   (source) => format(source, formatOptions),
