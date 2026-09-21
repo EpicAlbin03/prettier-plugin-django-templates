@@ -137,6 +137,43 @@ describe("HTML host context scanner", () => {
     expect(contexts.isDocumentFlowNormalizationSafeAt(offsetOf(source, "text"))).toBe(true);
   });
 
+  test.each([
+    '<pre title="a > b">before<span>{{ value }}</span>after</pre>outside',
+    "<PRE><pre>before</pre>{{ value }}after</PRE>outside",
+    '<textarea>before<fake title="{{ value }}after</textarea>outside',
+    "<pre><textarea>before{{ value }}</textarea>after</pre>outside",
+    "<textarea>{% verbatim %}</textarea>{% endverbatim %}{{ value }}</textarea>outside",
+    "<pre><!-- </pre> -->{{ value }}</pre>outside",
+  ])("tracks preformatted content without changing lexical context: %s", (source) => {
+    const contexts = scanHtmlHostContexts(source);
+    const valueOffset = offsetOf(source, "{{ value }}");
+    expect(contexts.at(valueOffset)).toBe("document-flow");
+    expect(contexts.isPreformattedAt(valueOffset)).toBe(true);
+    expect(contexts.isDocumentFlowNormalizationSafeAt(valueOffset)).toBe(false);
+    expect(contexts.isPreformattedAt(offsetOf(source, "outside"))).toBe(false);
+    expect(contexts.isDocumentFlowNormalizationSafeAt(offsetOf(source, "outside"))).toBe(true);
+  });
+
+  test.each([
+    '<div title="<pre>">{{ value }}</div>',
+    "<!-- <pre> -->{{ value }}",
+    '<script>"<pre>"</script>{{ value }}',
+    "{% verbatim %}<pre>{% endverbatim %}{{ value }}",
+    "<pre></pre>{{ value }}",
+    "<textarea></textarea>{{ value }}",
+  ])("does not leak preformatted context: %s", (source) => {
+    expect(scanHtmlHostContexts(source).isPreformattedAt(offsetOf(source, "{{ value }}"))).toBe(
+      false,
+    );
+  });
+
+  test.each(["<pre>", "<textarea>"])("preserves unclosed %s content through EOF", (open) => {
+    const source = `${open}{{ value }}`;
+    expect(scanHtmlHostContexts(source).isPreformattedAt(offsetOf(source, "{{ value }}"))).toBe(
+      true,
+    );
+  });
+
   test("defaults out-of-range offsets to conservative document flow", () => {
     const contexts = scanHtmlHostContexts("<div>");
     expect(contexts.at(-1)).toBe("document-flow");

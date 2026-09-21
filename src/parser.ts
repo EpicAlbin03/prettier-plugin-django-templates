@@ -37,6 +37,7 @@ interface TokenBase {
   end: number;
   inAttribute: boolean;
   inTag: boolean;
+  inPreformatted: boolean;
 }
 
 interface TextToken extends TokenBase {
@@ -99,7 +100,7 @@ function createTextToken(
   text: string,
   start: number,
   end: number,
-  state: { inAttribute: boolean; inTag: boolean },
+  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted">,
 ): TextToken {
   return {
     type: "Text",
@@ -107,8 +108,7 @@ function createTextToken(
     content: text,
     start,
     end,
-    inAttribute: state.inAttribute,
-    inTag: state.inTag,
+    ...state,
   };
 }
 
@@ -163,7 +163,7 @@ function createTagToken(
   raw: string,
   start: number,
   end: number,
-  state: { inAttribute: boolean; inTag: boolean },
+  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted">,
 ): TagToken {
   const content = normalizeTemplateTagContent(raw.slice(2, -2));
   const [name = "", ...rest] = content.split(/\s+/);
@@ -177,8 +177,7 @@ function createTagToken(
     role: getTagRole(name),
     start,
     end,
-    inAttribute: state.inAttribute,
-    inTag: state.inTag,
+    ...state,
   };
 }
 
@@ -204,6 +203,7 @@ function tokenize(text: string): Token[] {
     const tokenState = {
       inAttribute: hostContext === "attribute-value",
       inTag: hostContext !== "document-flow",
+      inPreformatted: hostContext === "document-flow" && hostContexts.isPreformattedAt(cursor),
     };
 
     const ignoreDelimiter = IGNORE_REGION_DELIMITERS.find(({ opener }) =>
@@ -222,8 +222,7 @@ function tokenize(text: string): Token[] {
         content: raw,
         start: cursor,
         end,
-        inAttribute: tokenState.inAttribute,
-        inTag: tokenState.inTag,
+        ...tokenState,
         closed,
       });
       cursor = end;
@@ -252,8 +251,7 @@ function tokenize(text: string): Token[] {
         content: raw.slice(2, -2),
         start: cursor,
         end,
-        inAttribute: tokenState.inAttribute,
-        inTag: tokenState.inTag,
+        ...tokenState,
       });
       cursor = end;
       continue;
@@ -273,8 +271,7 @@ function tokenize(text: string): Token[] {
         content: raw.slice(2, -2),
         start: cursor,
         end,
-        inAttribute: tokenState.inAttribute,
-        inTag: tokenState.inTag,
+        ...tokenState,
       });
       cursor = end;
       continue;
@@ -305,8 +302,7 @@ function tokenize(text: string): Token[] {
             endArgs: blockEndInfo.endArgs,
             start: cursor,
             end: blockEndInfo.end,
-            inAttribute: tokenState.inAttribute,
-            inTag: tokenState.inTag,
+            ...tokenState,
           });
           cursor = blockEndInfo.end;
           continue;
@@ -322,8 +318,7 @@ function tokenize(text: string): Token[] {
             args: tag.args,
             start: cursor,
             end: text.length,
-            inAttribute: tokenState.inAttribute,
-            inTag: tokenState.inTag,
+            ...tokenState,
           });
           cursor = text.length;
           continue;
@@ -358,6 +353,9 @@ function countPreNewLines(text: string, to: number): number {
 }
 
 function normalizeRaw(token: Token): string {
+  if (token.inPreformatted) {
+    return token.raw;
+  }
   switch (token.type) {
     case "Expression":
       return `{{ ${token.content.trim()} }}`;
@@ -429,6 +427,10 @@ function followsIgnoredRegionOrHtmlComment(tokens: Token[], index: number): bool
 }
 
 function protectedMarkerKindForToken(token: Token, forceBlock = false): ProtectedMarkerKind {
+  // Block markers invite HTML layout whitespace even when their source is preserved.
+  if (token.inPreformatted) {
+    return "inline";
+  }
   if (token.inTag && !token.inAttribute) {
     return "attr";
   }
@@ -513,6 +515,7 @@ export function parse(text: string): RootNode {
         id,
         content: token.content,
         originalText: normalizeRaw(token),
+        preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
@@ -532,6 +535,7 @@ export function parse(text: string): RootNode {
         id,
         content: token.content,
         originalText: normalizeRaw(token),
+        preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
@@ -551,6 +555,7 @@ export function parse(text: string): RootNode {
         id,
         content: token.raw,
         originalText: token.raw,
+        preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
@@ -571,6 +576,7 @@ export function parse(text: string): RootNode {
         id,
         content: token.raw,
         originalText: token.raw,
+        preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
@@ -591,6 +597,7 @@ export function parse(text: string): RootNode {
       id: createId(token),
       content: token.content,
       originalText: normalizeRaw(token),
+      preserveOriginalText: token.inPreformatted,
       preNewLines,
       sourceStart: token.start,
       sourceEnd: token.end,
@@ -655,7 +662,11 @@ export function parse(text: string): RootNode {
         sourceStart: frame.start.sourceStart,
         sourceEnd: token.end,
         nodes,
-        protectedMarkerKind: frame.start.inTag || frame.start.inAttribute ? "inline" : "block",
+        protectedMarkerKind:
+          frame.start.inTag || frame.start.inAttribute || frame.start.preserveOriginalText
+            ? "inline"
+            : "block",
+        preserveOriginalText: frame.start.preserveOriginalText,
         start: frame.start,
         end: endNode,
         childIds: frame.childIds,

@@ -5,6 +5,7 @@ export type HtmlHostContext = "document-flow" | "start-tag" | "attribute-value";
 export interface HtmlHostContextIndex {
   at(offset: number): HtmlHostContext;
   isDocumentFlowNormalizationSafeAt(offset: number): boolean;
+  isPreformattedAt(offset: number): boolean;
 }
 
 const DOCUMENT_FLOW = 0;
@@ -23,7 +24,11 @@ function fillContext(contexts: Uint8Array, from: number, to: number, context: nu
   contexts.fill(context, from, to);
 }
 
-function isRawTextClosingTag(source: string, offset: number, element: "script" | "style"): boolean {
+function isRawTextClosingTag(
+  source: string,
+  offset: number,
+  element: "script" | "style" | "textarea",
+): boolean {
   let cursor = offset + 1;
   if (source[cursor] !== "/") {
     return false;
@@ -65,13 +70,16 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
   let inTag = false;
   let quote: '"' | "'" | undefined;
   let tagStart = -1;
-  let rawTextElement: "script" | "style" | undefined;
+  let rawTextElement: "script" | "style" | "textarea" | undefined;
+  const preformatted = new Uint8Array(source.length);
+  let preformattedStart: number | undefined;
+  let preDepth = 0;
 
   for (let offset = 0; offset < source.length; offset += 1) {
     const context = quote ? ATTRIBUTE_VALUE : inTag ? START_TAG : DOCUMENT_FLOW;
     contexts[offset] = context;
 
-    if (rawTextElement) {
+    if (rawTextElement && rawTextElement !== "textarea") {
       documentFlowNormalizationSafety[offset] = 0;
       if (source[offset] !== "<" || !isRawTextClosingTag(source, offset, rawTextElement)) {
         continue;
@@ -98,6 +106,18 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
       fillContext(contexts, offset, end, context);
       offset = end - 1;
       continue;
+    }
+
+    // Textarea content is text, not markup, but Django constructs still need scanning.
+    if (rawTextElement === "textarea") {
+      if (source[offset] !== "<" || !isRawTextClosingTag(source, offset, "textarea")) {
+        continue;
+      }
+      if (preDepth === 0 && preformattedStart !== undefined) {
+        preformatted.fill(1, preformattedStart, offset);
+        preformattedStart = undefined;
+      }
+      rawTextElement = undefined;
     }
 
     if (!inTag && source.startsWith("<!--", offset)) {
@@ -133,13 +153,28 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
 
     if (inTag && char === ">") {
       const tagText = source.slice(tagStart, offset + 1);
-      const openingRawTextTag = tagText.match(/^<\s*(script|style)(?=[\s/>])/i)?.[1];
+      const openingRawTextTag = tagText.match(/^<\s*(script|style|textarea)(?=[\s/>])/i)?.[1];
       const normalizedRawTextTag = openingRawTextTag?.toLowerCase();
       if (
-        (normalizedRawTextTag === "script" || normalizedRawTextTag === "style") &&
+        (normalizedRawTextTag === "script" ||
+          normalizedRawTextTag === "style" ||
+          normalizedRawTextTag === "textarea") &&
         !/\/\s*>$/.test(tagText)
       ) {
         rawTextElement = normalizedRawTextTag;
+        if (normalizedRawTextTag === "textarea") {
+          preformattedStart ??= offset + 1;
+        }
+      }
+      if (/^<pre(?=[\s>])/i.test(tagText)) {
+        preDepth += 1;
+        preformattedStart ??= offset + 1;
+      } else if (/^<\/pre\s*>/i.test(tagText) && preDepth > 0) {
+        preDepth -= 1;
+        if (preDepth === 0 && preformattedStart !== undefined) {
+          preformatted.fill(1, preformattedStart, tagStart);
+          preformattedStart = undefined;
+        }
       }
       inTag = false;
       tagStart = -1;
@@ -151,12 +186,19 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
     }
   }
 
+  if (preformattedStart !== undefined) {
+    preformatted.fill(1, preformattedStart);
+  }
+
   return {
     at(offset: number): HtmlHostContext {
       return contextNames[contexts[offset] ?? DOCUMENT_FLOW];
     },
     isDocumentFlowNormalizationSafeAt(offset: number): boolean {
-      return documentFlowNormalizationSafety[offset] === 1;
+      return documentFlowNormalizationSafety[offset] === 1 && preformatted[offset] !== 1;
+    },
+    isPreformattedAt(offset: number): boolean {
+      return preformatted[offset] === 1;
     },
   };
 }

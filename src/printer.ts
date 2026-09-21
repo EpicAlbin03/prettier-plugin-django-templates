@@ -1295,8 +1295,8 @@ function normalizeHtmlAroundProtectedMarkers(currentDoc: string): string {
         `^(?<indent>\\s*)(?<open><([A-Za-z][^\\s/>]*)(?:[^>]*)>)(?<body>${INLINE_MARKER_SOURCE})(?<close><\\/\\3>)(?<trail>\\s*)$`,
         "gm",
       ),
-      (match, indent, open, _tagName, body, close, trail) => {
-        if ((open.match(/\s+\S+=/g) ?? []).length <= 1) {
+      (match, indent, open, tagName, body, close, trail) => {
+        if (/^(pre|textarea)$/i.test(tagName) || (open.match(/\s+\S+=/g) ?? []).length <= 1) {
           return match;
         }
 
@@ -1329,8 +1329,10 @@ function prepareSegmentForHtml(segment: string, markerAllocator: InternalMarkerA
       new RegExp(
         `^(?<open><([A-Za-z][^\\s/>]*)(?:[^>]*)>)(?<body>${INLINE_MARKER_SOURCE})(?<close><\\/\\2>)(?<trail>\\s*)$`,
       ),
-      (match, open, _tagName, body, close, trail) =>
-        (open.match(/\s+\S+=/g) ?? []).length > 1 ? `${open}\n  ${body}\n${close}${trail}` : match,
+      (match, open, tagName, body, close, trail) =>
+        !/^(pre|textarea)$/i.test(tagName) && (open.match(/\s+\S+=/g) ?? []).length > 1
+          ? `${open}\n  ${body}\n${close}${trail}`
+          : match,
     );
 
   return { segment: prepared, beforeReplacements };
@@ -1346,6 +1348,10 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
     const node = path.getNode();
     if (!node || (node.type !== "root" && node.type !== "template-block")) {
       return undefined;
+    }
+
+    if (node.preserveOriginalText) {
+      return node.originalText;
     }
 
     const translationBlockText = getTranslationBlockText(node);
@@ -1479,9 +1485,16 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
             return currentDoc;
           }
 
-          currentDoc = normalizeHtmlAroundProtectedMarkers(
-            restoreInlineProtectedMarkerRuns(currentDoc, inlineProtectedMarkerPairs),
+          // Preformatted text can contain literal tag-like text as well as markers.
+          // Do not run HTML/whitespace rewrites over a string containing preserved source.
+          const containsPreservedSource = markerEntries(currentDoc, node.nodes).some(
+            ({ id }) => node.nodes[id].preserveOriginalText,
           );
+          if (!containsPreservedSource) {
+            currentDoc = normalizeHtmlAroundProtectedMarkers(
+              restoreInlineProtectedMarkerRuns(currentDoc, inlineProtectedMarkerPairs),
+            );
+          }
 
           return replaceProtectedMarkersInString(currentDoc, node.nodes, (id, context) => {
             const currentNode = node.nodes[id];
