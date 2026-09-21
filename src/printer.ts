@@ -456,6 +456,41 @@ function getTranslationBlockText(node: DjangoNode): string | undefined {
   return `{% ${node.start.content.trim()} %}${body}{% ${node.end.content.trim()} %}`;
 }
 
+// Inline layout must preserve literal source gaps, not the spelling of Django tokens.
+// Raw, ignored, preformatted, and translation bodies keep their existing stronger protection.
+function getInlineBlockText(block: TemplateBlockNode): string {
+  if (block.preserveOriginalText) {
+    return block.originalText;
+  }
+  const translation = getTranslationBlockText(block);
+  if (translation !== undefined) {
+    return translation;
+  }
+
+  const parts: string[] = [];
+  let cursor = block.sourceStart;
+  for (const child of [block.start, ...block.childIds.map((id) => block.nodes[id]), block.end]) {
+    parts.push(
+      block.originalText.slice(cursor - block.sourceStart, child.sourceStart - block.sourceStart),
+    );
+    parts.push(
+      child.preserveOriginalText
+        ? child.originalText
+        : child.type === "template-block"
+          ? getInlineBlockText(child)
+          : child.type === "template-tag"
+            ? `{% ${child.content.trim()} %}`
+            : child.type === "expression"
+              ? formatExpression(child)
+              : child.originalText,
+    );
+    cursor = child.sourceEnd;
+  }
+  return parts.join("");
+}
+
+const inlineBlockTexts = new WeakMap<DjangoNode, string>();
+
 function printTemplateTag(node: TemplateTagNode): Doc {
   const templateTag = `{% ${node.content.trim()} %}`;
 
@@ -1410,9 +1445,14 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               !currentNode.inTag &&
               !currentNode.inAttribute &&
               isInlineHtmlElement(hostContexts.elementAt(sourceMarkerIndex));
-            if (ignoreDoc || preserveInlineBlock || currentNode.preserveOriginalText) {
+            if (ignoreDoc || currentNode.preserveOriginalText) {
               currentNode.preserveOriginalText = true;
               return { doc: currentNode.originalText };
+            }
+            if (preserveInlineBlock) {
+              const text = getInlineBlockText(currentNode);
+              inlineBlockTexts.set(currentNode, text);
+              return { doc: text };
             }
 
             const followsInlineExpressionInElement =
@@ -1518,19 +1558,22 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       .filter(
         (child) =>
           child.preserveOriginalText ||
+          inlineBlockTexts.has(child) ||
           child.type === "raw-block" ||
           child.type === "ignore-region" ||
           getTranslationBlockText(child) !== undefined,
       )
       .sort((left, right) => right.originalText.length - left.originalText.length);
     for (const child of preservedNodes) {
-      const preservedText = child.preserveOriginalText
-        ? child.originalText
-        : child.type === "raw-block"
-          ? getRawBlockText(child)
-          : child.type === "ignore-region"
-            ? child.originalText
-            : getTranslationBlockText(child);
+      const preservedText =
+        inlineBlockTexts.get(child) ??
+        (child.preserveOriginalText
+          ? child.originalText
+          : child.type === "raw-block"
+            ? getRawBlockText(child)
+            : child.type === "ignore-region"
+              ? child.originalText
+              : getTranslationBlockText(child));
       if (!preservedText || !protectedFormatted.includes(preservedText)) {
         continue;
       }
