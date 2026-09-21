@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-preserve conditional html fragments and significant whitespace while formatting safe inner content
+preserve conditional HTML fragments and significant whitespace, including literal whitespace in quoted attribute values, while formatting safe inner content
