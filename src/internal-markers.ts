@@ -74,6 +74,6 @@ export class InternalMarkerAllocator {
       throw new Error("Cannot restore an internal marker that was not allocated.");
     }
 
-    return value.replace(new RegExp(escapeMarkerForRegExp(marker), "g"), replacement);
+    return value.replace(new RegExp(escapeMarkerForRegExp(marker), "g"), () => replacement);
   }
 }
