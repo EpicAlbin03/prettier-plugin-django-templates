@@ -873,6 +873,19 @@ function hasAmbiguousHtmlBranches(node: RootNode | TemplateBlockNode): boolean {
   });
 }
 
+function hasUnbalancedPreservedHtml(node: RootNode | TemplateBlockNode): boolean {
+  return markerEntries(node.content, node.nodes).some(({ id }) => {
+    const child = node.nodes[id];
+    if (child.type !== "raw-block" || !child.preserveOriginalText) {
+      return false;
+    }
+    // A protected comment range can also contain a conditional HTML boundary. Hiding
+    // half a wrapper would conceal its whitespace context from the HTML formatter.
+    const balance = getHtmlFragmentBalance(child.originalText);
+    return !balance || balance.unclosed.length > 0 || balance.unexpectedClosings.length > 0;
+  });
+}
+
 function hasUnbalancedHtmlChild(node: RootNode | TemplateBlockNode): boolean {
   return markerEntries(node.content, node.nodes).some(({ id }) => {
     const child = node.nodes[id];
@@ -1305,7 +1318,8 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
     if (
       !node.inTag &&
       !node.inAttribute &&
-      (hasAmbiguousHtmlBranches(node) ||
+      (hasUnbalancedPreservedHtml(node) ||
+        hasAmbiguousHtmlBranches(node) ||
         ((node.type === "template-block" || hasUnbalancedHtmlChild(node)) &&
           hasUnbalancedHtml(node)) ||
         (node.type === "template-block" && hasUnbalancedHtml(node, true)) ||

@@ -1,3 +1,4 @@
+import { protectHtmlComments, type HtmlCommentRange } from "./comment-preservation.js";
 import { scanHtmlHostContexts } from "./html-host-context.js";
 import { InternalMarkerAllocator } from "./internal-markers.js";
 import {
@@ -197,7 +198,8 @@ function tokenize(text: string) {
   const templatePattern = /{{[^\n]*?}}|{#[^\n]*?#}|{%[^\n]*?%}/y;
   let cursor = 0;
   let preserveOriginalText = false;
-  let htmlCommentEnd = 0;
+  let htmlComment: HtmlCommentRange | undefined;
+  const htmlComments: HtmlCommentRange[] = [];
 
   while (cursor < text.length) {
     const hostContext = hostContexts.at(cursor);
@@ -211,7 +213,9 @@ function tokenize(text: string) {
       text.startsWith(opener, cursor),
     );
     if (ignoreDelimiter) {
-      preserveOriginalText ||= cursor < htmlCommentEnd;
+      if (htmlComment && cursor < htmlComment.end) {
+        htmlComment.hasTemplateSyntax = true;
+      }
       const { end, closed } = findIgnoreRegionEnd(
         text,
         cursor + ignoreDelimiter.opener.length,
@@ -232,10 +236,15 @@ function tokenize(text: string) {
     }
 
     if (text.startsWith("<!--", cursor)) {
-      if (cursor >= htmlCommentEnd) {
-        htmlCommentEnd = readUntil(text, cursor + 4, "-->");
+      if (!htmlComment || cursor >= htmlComment.end) {
+        htmlComment = {
+          start: cursor,
+          end: readUntil(text, cursor + 4, "-->"),
+          hasTemplateSyntax: false,
+        };
+        htmlComments.push(htmlComment);
       }
-      const end = Math.min(htmlCommentEnd, findNextSpecial(text, cursor + 4, specialPattern));
+      const end = Math.min(htmlComment.end, findNextSpecial(text, cursor + 4, specialPattern));
       const raw = text.slice(cursor, end);
       tokens.push(createTextToken(raw, cursor, end, tokenState));
       cursor = end;
@@ -244,9 +253,11 @@ function tokenize(text: string) {
 
     templatePattern.lastIndex = cursor;
     const templateMatch = templatePattern.exec(text);
-    // HTML comments protect formatting, not Django syntax. A block may cross their edges,
-    // so avoid passing fragments of that comment to the HTML printer while still validating it.
-    preserveOriginalText ||= Boolean(templateMatch) && cursor < htmlCommentEnd;
+    // Validate Django syntax even inside HTML comments; preserve only the affected
+    // ranges after the complete template structure (including crossing blocks) is known.
+    if (templateMatch && htmlComment && cursor < htmlComment.end) {
+      htmlComment.hasTemplateSyntax = true;
+    }
     if (!templateMatch && /^{[{#%]/.test(text.slice(cursor, cursor + 2))) {
       // Formatting literal delimiters could remove the LF that prevents Django recognition.
       // Preserve the document, but keep scanning so nested valid constructs are still parsed.
@@ -340,7 +351,7 @@ function tokenize(text: string) {
     cursor = next;
   }
 
-  return { tokens, preserveOriginalText };
+  return { tokens, preserveOriginalText, htmlComments };
 }
 
 function countPreNewLines(text: string, to: number): number {
@@ -462,7 +473,7 @@ interface OpenBlock {
 }
 
 export function parse(text: string): RootNode {
-  const { tokens, preserveOriginalText } = tokenize(text);
+  const { tokens, preserveOriginalText, htmlComments } = tokenize(text);
   const standaloneTagsWithLaterEnds = getStandaloneTagsWithLaterEnds(tokens);
   const nodes: Record<string, DjangoNode> = {};
   const rootParts: string[] = [];
@@ -719,5 +730,8 @@ export function parse(text: string): RootNode {
   }
 
   root.content = rootParts.join("");
+  if (!preserveOriginalText) {
+    protectHtmlComments(root, htmlComments, markerAllocator);
+  }
   return root;
 }

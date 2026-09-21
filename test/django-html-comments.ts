@@ -70,10 +70,11 @@ describe("Django syntax in HTML comments", () => {
     "{# prettier-ignore-start #}{% endif %}{# prettier-ignore-end #}",
   ])("retains explicit ignore regions: %s", async (region) => {
     const source = `<!-- ${region} -->`;
-    expect(Object.values(parse(source).nodes)).toEqual([
-      expect.objectContaining({ type: "ignore-region" }),
-    ]);
-    expect(await formatTemplate(source)).toBe(source);
-    expect(await formatTemplate(await formatTemplate(source))).toBe(source);
+    expect(
+      Object.values(parse(source).nodes).filter((node) => node.type === "ignore-region"),
+    ).toEqual([expect.objectContaining({ type: "ignore-region" })]);
+    const output = await formatTemplate(source);
+    expect(output.trimEnd()).toBe(source);
+    expect(await formatTemplate(output)).toBe(output);
   });
 });
