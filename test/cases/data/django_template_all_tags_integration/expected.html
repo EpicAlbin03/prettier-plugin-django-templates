@@ -105,14 +105,10 @@
       <img src="{{ STATIC_PREFIX }}images/logo.svg" alt="" />
       <img src="{{ MEDIA_PREFIX }}{{ user.avatar }}" alt="" />
 
-      {% blocktranslate count count=items|length %}
-        There is {{ count }} item.
-      {% plural %}
-        There are {{ count }} items.
-      {% endblocktranslate %}
-      {% blocktrans with name=user.get_full_name %}
-        Hello {{ name }}
-      {% endblocktrans %}
+      {% blocktranslate count count=items|length %} There is {{ count }} item. {% plural %} There are
+    {{ count }} items. {% endblocktranslate %}
+      {% blocktrans with name=user.get_full_name %}Hello {{
+    name }}{% endblocktrans %}
       {% language "fr" %}
         {% translate "Welcome" %}
       {% endlanguage %}

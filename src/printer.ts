@@ -469,6 +469,23 @@ function printRawBlock(node: RawBlockNode): Doc {
   return getRawBlockText(node);
 }
 
+function getTranslationBlockText(node: DjangoNode): string | undefined {
+  if (
+    node.type !== "template-block" ||
+    (node.start.keyword !== "blocktranslate" && node.start.keyword !== "blocktrans")
+  ) {
+    return undefined;
+  }
+
+  // Django uses body whitespace (and literal HTML) in gettext keys. Preserve even
+  // trimmed bodies: HTML formatting can change more than Django's trimming removes.
+  const body = node.originalText.slice(
+    node.start.sourceEnd - node.sourceStart,
+    node.end.sourceStart - node.sourceStart,
+  );
+  return `{% ${node.start.content.trim()} %}${body}{% ${node.end.content.trim()} %}`;
+}
+
 function printTemplateTag(node: TemplateTagNode): Doc {
   const templateTag = `{% ${node.content.trim()} %}`;
 
@@ -1331,6 +1348,11 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       return undefined;
     }
 
+    const translationBlockText = getTranslationBlockText(node);
+    if (translationBlockText !== undefined) {
+      return translationBlockText;
+    }
+
     // Prettier's public Options type leaves plugin-owned fields unknown, so validate this boundary.
     // oxlint-disable-next-line anti-slop/no-runtime-typeof
     if (typeof options.originalText !== "string") {
@@ -1585,7 +1607,8 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
         (child) =>
           child.preserveOriginalText ||
           child.type === "raw-block" ||
-          child.type === "ignore-region",
+          child.type === "ignore-region" ||
+          getTranslationBlockText(child) !== undefined,
       )
       .sort((left, right) => right.originalText.length - left.originalText.length);
     for (const child of preservedNodes) {
@@ -1595,7 +1618,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
           ? getRawBlockText(child)
           : child.type === "ignore-region"
             ? child.originalText
-            : undefined;
+            : getTranslationBlockText(child);
       if (!preservedText || !protectedFormatted.includes(preservedText)) {
         continue;
       }

@@ -1,0 +1,18 @@
+{%if show%}
+<section>
+{%blocktranslate%}
+   Hello  {{name}}
+
+ world 
+{%endblocktranslate%}
+{%blocktrans%} 	 {%endblocktrans%}
+<input title="{%blocktrans%} Hello  {{name}} {%endblocktrans%}">
+{%blocktranslate count n=items|length%}{{n}}{% plural %}{{n}} items{%endblocktranslate%}
+{%blocktranslate%}<a  title='Help' href="{{url}}">Read   more</a>{%endblocktranslate%}
+{%blocktrans trimmed%}
+  Hello   world
+
+  <b  title='Help'> Read  more </b>
+{%endblocktrans%}
+</section>
+{%endif%}
