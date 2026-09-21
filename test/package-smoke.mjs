@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const packageName = "prettier-plugin-django-templates";
 const projectDirectory = fileURLToPath(new URL("..", import.meta.url));
@@ -89,7 +89,6 @@ try {
 import assert from "node:assert/strict";
 import * as prettier from "prettier";
 import * as plugin from "${packageName}";
-import * as browserPlugin from "${packageName}/browser";
 
 const formatted = await prettier.format("<div>{{name}}</div>", {
   parser: "django-html",
@@ -99,10 +98,52 @@ const formatted = await prettier.format("<div>{{name}}</div>", {
 assert.equal(formatted, "<div>{{ name }}</div>\\n");
 for (const member of ["languages", "parsers", "printers"]) {
   assert.ok(member in plugin, "root export is missing " + member);
-  assert.ok(member in browserPlugin, "browser export is missing " + member);
 }
 `,
   );
+  await writeFile(
+    join(temporaryDirectory, "commonjs-smoke.cjs"),
+    `
+const assert = require("node:assert/strict");
+const prettier = require("prettier");
+const plugin = require("${packageName}");
+
+prettier
+  .format("<div>{{name}}</div>", { parser: "django-html", plugins: [plugin] })
+  .then((formatted) => assert.equal(formatted, "<div>{{ name }}</div>\\n"));
+`,
+  );
+  await writeFile(
+    join(temporaryDirectory, "browser-smoke.mjs"),
+    `
+import * as prettier from "prettier/standalone";
+import * as plugin from "${packageName}/browser";
+
+export const formatted = await prettier.format("<div>{{name}}</div>", {
+  parser: "django-html",
+  plugins: [plugin],
+});
+`,
+  );
+  await writeFile(
+    join(temporaryDirectory, "vite.config.mjs"),
+    `
+export default {
+  build: {
+    emptyOutDir: true,
+    lib: {
+      entry: "browser-smoke.mjs",
+      fileName: "browser-smoke",
+      formats: ["es"],
+    },
+    minify: false,
+    outDir: "browser-dist",
+    target: "es2022",
+  },
+};
+`,
+  );
+  await writeFile(join(temporaryDirectory, "cli-smoke.html"), "<div>{{name}}</div>");
   await writeFile(
     join(temporaryDirectory, "types-smoke.ts"),
     `
@@ -159,6 +200,34 @@ void resolvedBrowserPlugin;
   run(process.execPath, [join(temporaryDirectory, "runtime-smoke.mjs")], {
     cwd: temporaryDirectory,
   });
+  run(process.execPath, [join(temporaryDirectory, "commonjs-smoke.cjs")], {
+    cwd: temporaryDirectory,
+  });
+
+  const cliOutput = runPnpm(
+    ["exec", "prettier", "--plugin", packageName, "--parser", "django-html", "cli-smoke.html"],
+    { cwd: temporaryDirectory },
+  );
+  assert.equal(cliOutput, "<div>{{ name }}</div>\n");
+
+  runPnpm(
+    [
+      "exec",
+      "vite",
+      "build",
+      temporaryDirectory,
+      "--config",
+      join(temporaryDirectory, "vite.config.mjs"),
+      "--logLevel",
+      "warn",
+    ],
+    { cwd: projectDirectory },
+  );
+  const browserBundle = await import(
+    pathToFileURL(join(temporaryDirectory, "browser-dist", "browser-smoke.js")).href
+  );
+  assert.equal(browserBundle.formatted, "<div>{{ name }}</div>\n");
+
   run(
     process.execPath,
     [join(temporaryDirectory, "node_modules/typescript/bin/tsc"), "--project", "tsconfig.json"],
