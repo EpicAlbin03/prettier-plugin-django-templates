@@ -11,15 +11,20 @@ const prettify = (code: string, options: Options) =>
   });
 
 const casesDir = "test/cases/data";
-const cases = readdirSync(casesDir);
+const cases = readdirSync(casesDir, { withFileTypes: true });
 
-for (const caseName of cases) {
-  if (caseName.startsWith("_")) {
+for (const entry of cases) {
+  if (!entry.isDirectory() || entry.name.startsWith("_")) {
+    continue;
+  }
+
+  const caseName = entry.name;
+  const base = `${casesDir}/${caseName}`;
+  if (readdirSync(base).length === 0) {
     continue;
   }
 
   test.concurrent(`cases: ${caseName}`, async ({ expect }) => {
-    const base = `${casesDir}/${caseName}`;
     const input = readFileSync(`${base}/input.html`, "utf-8").replace(/\r?\n/g, "\n");
     const expected = readFileSync(`${base}/expected.html`, "utf-8").replace(/\r?\n/g, "\n");
     const configPath = `${base}/config.json`;

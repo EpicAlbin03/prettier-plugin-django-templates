@@ -14,6 +14,17 @@ const prettierVersion =
   process.argv.slice(2).find((argument) => argument !== "--") ?? installedPrettierManifest.version;
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "django-template-package-"));
 const tarballPath = join(temporaryDirectory, `${packageName}.tgz`);
+const formatCases = [
+  ["<div>{{name}}</div>", "<div>{{ name }}</div>\n"],
+  [
+    "<main>{%if enabled%}<div>{{value}}</div>{%endif%}</main>",
+    "<main>\n  {% if enabled %}\n    <div>{{ value }}</div>\n  {% endif %}\n</main>\n",
+  ],
+  [
+    "{%verbatim%}{{ untouched }}{%endverbatim%}",
+    "{% verbatim %}{{ untouched }}{% endverbatim %}\n",
+  ],
+];
 
 function run(command, args, options = {}) {
   const spawnOptions = {
@@ -90,13 +101,12 @@ import assert from "node:assert/strict";
 import * as prettier from "prettier";
 import * as plugin from "${packageName}";
 
-const formatted = await prettier.format("<div>{{name}}</div>", {
-  parser: "django-html",
-  plugins: [plugin],
-});
-
-assert.equal(formatted, "<div>{{ name }}</div>\\n");
-for (const member of ["languages", "parsers", "printers"]) {
+const options = { parser: "django-html", plugins: [plugin] };
+for (const [source, expected] of ${JSON.stringify(formatCases)}) {
+  assert.equal(await prettier.format(source, options), expected);
+  assert.equal(await prettier.format(expected, options), expected);
+}
+for (const member of ["languages", "options", "parsers", "printers"]) {
   assert.ok(member in plugin, "root export is missing " + member);
 }
 `,
@@ -108,21 +118,34 @@ const assert = require("node:assert/strict");
 const prettier = require("prettier");
 const plugin = require("${packageName}");
 
-prettier
-  .format("<div>{{name}}</div>", { parser: "django-html", plugins: [plugin] })
-  .then((formatted) => assert.equal(formatted, "<div>{{ name }}</div>\\n"));
+async function checkFormatting() {
+  const options = { parser: "django-html", plugins: [plugin] };
+  for (const [source, expected] of ${JSON.stringify(formatCases)}) {
+    assert.equal(await prettier.format(source, options), expected);
+    assert.equal(await prettier.format(expected, options), expected);
+  }
+}
+checkFormatting().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 `,
   );
   await writeFile(
     join(temporaryDirectory, "browser-smoke.mjs"),
     `
 import * as prettier from "prettier/standalone";
+import * as htmlPlugin from "prettier/plugins/html";
 import * as plugin from "${packageName}/browser";
 
-export const formatted = await prettier.format("<div>{{name}}</div>", {
-  parser: "django-html",
-  plugins: [plugin],
-});
+const options = { parser: "django-html", plugins: [htmlPlugin, plugin] };
+export const formatted = [];
+export const reformatted = [];
+for (const [source] of ${JSON.stringify(formatCases)}) {
+  const result = await prettier.format(source, options);
+  formatted.push(result);
+  reformatted.push(await prettier.format(result, options));
+}
 `,
   );
   await writeFile(
@@ -226,7 +249,9 @@ void resolvedBrowserPlugin;
   const browserBundle = await import(
     pathToFileURL(join(temporaryDirectory, "browser-dist", "browser-smoke.js")).href
   );
-  assert.equal(browserBundle.formatted, "<div>{{ name }}</div>\n");
+  const expectedFormats = formatCases.map(([, expected]) => expected);
+  assert.deepEqual(browserBundle.formatted, expectedFormats);
+  assert.deepEqual(browserBundle.reformatted, expectedFormats);
 
   run(
     process.execPath,
