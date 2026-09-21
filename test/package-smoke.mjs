@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageName = "prettier-plugin-django-templates";
-const prettierVersion = process.argv.slice(2).find((argument) => argument !== "--") ?? "^3.0.0";
 const projectDirectory = fileURLToPath(new URL("..", import.meta.url));
+const installedPrettierManifest = JSON.parse(
+  await readFile(join(projectDirectory, "node_modules", "prettier", "package.json"), "utf8"),
+);
+const prettierVersion =
+  process.argv.slice(2).find((argument) => argument !== "--") ?? installedPrettierManifest.version;
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "django-template-package-"));
 const tarballPath = join(temporaryDirectory, `${packageName}.tgz`);
 
@@ -127,6 +131,18 @@ void resolvedBrowserPlugin;
   );
 
   await writeFile(join(temporaryDirectory, ".npmrc"), "resolution-mode=highest\n");
+  await copyFile(
+    join(projectDirectory, "pnpm-workspace.yaml"),
+    join(temporaryDirectory, "pnpm-workspace.yaml"),
+  );
+  assert.equal(
+    runPnpm(["config", "get", "minimumReleaseAge"], { cwd: temporaryDirectory }).trim(),
+    "2880",
+  );
+  assert.equal(
+    runPnpm(["config", "get", "blockExoticSubdeps"], { cwd: temporaryDirectory }).trim(),
+    "true",
+  );
   runPnpm(
     [
       "add",
