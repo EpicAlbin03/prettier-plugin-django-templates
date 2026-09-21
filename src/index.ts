@@ -1,7 +1,7 @@
 import type { Parser, Printer, SupportLanguage } from "prettier";
 import type { DjangoNode } from "./ast.js";
 import { parse } from "./parser.js";
-import { embed, getVisitorKeys, print } from "./printer.js";
+import { embed, getVisitorKeys, preprocess, print } from "./printer.js";
 
 const PLUGIN_KEY = "django-html";
 
@@ -25,6 +25,7 @@ const parsers: Record<typeof PLUGIN_KEY, Parser<DjangoNode>> = {
 
 const printers: Record<typeof PLUGIN_KEY, Printer<DjangoNode>> = {
   [PLUGIN_KEY]: {
+    preprocess,
     print,
     embed,
     getVisitorKeys,

@@ -22,8 +22,8 @@ describe("generated scale coverage", () => {
     const expressions = Object.values(root.nodes).filter((node) => node.type === "expression");
 
     expect(expressions).toHaveLength(count);
-    expect(root.content).not.toContain("{{");
-    expect(root.content.length).toBeLessThan(source.length * 2);
+    expect(root.html).not.toContain("{{");
+    expect(root.html.length).toBeLessThan(source.length * 2);
     expect(expressions[0]).not.toHaveProperty("nodes");
     expect(expressions.at(-1)?.sourceStart).toBe(source.lastIndexOf("{{"));
     expect(source.slice(expressions.at(-1)?.sourceStart, expressions.at(-1)?.sourceEnd)).toBe(
@@ -64,11 +64,11 @@ describe("generated scale coverage", () => {
     const malformed = `${"{% if value %}\n".repeat(1_000)}{{ tail }}`;
     const first = parse(malformed);
     const second = parse(malformed);
-    expect(first.content).toBe(second.content);
+    expect(first.html).toBe(second.html);
     expect(Object.values(first.nodes).filter((node) => node.type === "template-tag")).toHaveLength(
       1_000,
     );
-    expect(first.content).not.toContain("{% if value %}");
+    expect(first.html).not.toContain("{% if value %}");
   });
 
   test("formats marker-heavy attribute values idempotently", async () => {

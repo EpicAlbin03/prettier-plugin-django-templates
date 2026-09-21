@@ -15,16 +15,21 @@ import {
   isRawBodyTag,
 } from "./tags.js";
 import type {
-  TemplateBlockNode,
   CommentNode,
-  DjangoNode,
   ExpressionNode,
   IgnoreRegionNode,
   ProtectedMarkerKind,
   RawBlockNode,
-  RootNode,
-  TemplateTagNode,
 } from "./ast.js";
+
+import type { RootNode } from "./ast.js";
+import {
+  finishDocument,
+  type DraftRoot,
+  type DraftBlock as TemplateBlockNode,
+  type DraftTag as TemplateTagNode,
+  type DraftNode as DjangoNode,
+} from "./ast-builders.js";
 
 const NOT_FOUND = -1;
 
@@ -368,25 +373,6 @@ function countPreNewLines(text: string, to: number): number {
   return segment.split("\n").length - 1;
 }
 
-function normalizeRaw(token: Token): string {
-  if (token.inPreformatted) {
-    return token.raw;
-  }
-  switch (token.type) {
-    case "Expression":
-      return `{{ ${token.content.trim()} }}`;
-    case "Comment":
-      return `{# ${token.content.trim()} #}`;
-    case "Tag":
-      return `{% ${token.content.trim()} %}`;
-    case "RawBlock":
-    case "IgnoreRegion":
-      return token.raw;
-    default:
-      return token.raw;
-  }
-}
-
 function matchesEnd(start: TemplateTagNode, endName: string): boolean {
   return getExpectedEndNames(start.keyword).includes(endName);
 }
@@ -477,17 +463,18 @@ export function parse(text: string): RootNode {
   const standaloneTagsWithLaterEnds = getStandaloneTagsWithLaterEnds(tokens);
   const nodes: Record<string, DjangoNode> = {};
   const rootParts: string[] = [];
-  const root: RootNode = {
+  const root: DraftRoot = {
     type: "root",
     id: "root",
-    content: "",
-    originalText: text,
+    html: "",
+    sourceText: text,
     preserveOriginalText,
     preNewLines: 0,
     sourceStart: 0,
     sourceEnd: text.length,
     nodes,
     protectedMarkerKind: "block",
+    hostContext: "document-flow",
   };
 
   const markerAllocator = new InternalMarkerAllocator(text);
@@ -531,14 +518,17 @@ export function parse(text: string): RootNode {
         type: "expression",
         id,
         content: token.content,
-        originalText: normalizeRaw(token),
+        sourceText: token.raw,
         preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
         protectedMarkerKind: protectedMarkerKindForToken(token),
-        inTag: token.inTag,
-        inAttribute: token.inAttribute,
+        hostContext: token.inAttribute
+          ? "attribute-value"
+          : token.inTag
+            ? "start-tag"
+            : "document-flow",
       };
       nodes[id] = node;
       append(id, id);
@@ -551,14 +541,17 @@ export function parse(text: string): RootNode {
         type: "comment",
         id,
         content: token.content,
-        originalText: normalizeRaw(token),
+        sourceText: token.raw,
         preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
         protectedMarkerKind: protectedMarkerKindForToken(token),
-        inTag: token.inTag,
-        inAttribute: token.inAttribute,
+        hostContext: token.inAttribute
+          ? "attribute-value"
+          : token.inTag
+            ? "start-tag"
+            : "document-flow",
       };
       nodes[id] = node;
       append(id, id);
@@ -571,14 +564,17 @@ export function parse(text: string): RootNode {
         type: "ignore-region",
         id,
         content: token.raw,
-        originalText: token.raw,
+        sourceText: token.raw,
         preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
         protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
-        inTag: token.inTag,
-        inAttribute: token.inAttribute,
+        hostContext: token.inAttribute
+          ? "attribute-value"
+          : token.inTag
+            ? "start-tag"
+            : "document-flow",
         closed: token.closed,
       };
       nodes[id] = node;
@@ -592,14 +588,17 @@ export function parse(text: string): RootNode {
         type: "raw-block",
         id,
         content: token.raw,
-        originalText: token.raw,
+        sourceText: token.raw,
         preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
         protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
-        inTag: token.inTag,
-        inAttribute: token.inAttribute,
+        hostContext: token.inAttribute
+          ? "attribute-value"
+          : token.inTag
+            ? "start-tag"
+            : "document-flow",
         keyword: token.name,
         args: token.args,
         body: token.body,
@@ -613,7 +612,7 @@ export function parse(text: string): RootNode {
     const templateTagBase = {
       id: createId(token),
       content: token.content,
-      originalText: normalizeRaw(token),
+      sourceText: token.raw,
       preserveOriginalText: token.inPreformatted,
       preNewLines,
       sourceStart: token.start,
@@ -621,13 +620,16 @@ export function parse(text: string): RootNode {
       keyword: token.name,
       role: token.role,
       protectedMarkerKind: protectedMarkerKindForToken(token),
-      inTag: token.inTag,
-      inAttribute: token.inAttribute,
+      hostContext: token.inAttribute
+        ? "attribute-value"
+        : token.inTag
+          ? "start-tag"
+          : "document-flow",
     } as const;
     if (token.role === "branch") {
       if (!hasMatchingBranchParent(token, stack)) {
         throw new Error(
-          `No start tag found for template branch tag "${templateTagBase.originalText}".`,
+          `No start tag found for template branch tag "{% ${templateTagBase.content} %}".`,
         );
       }
 
@@ -654,12 +656,12 @@ export function parse(text: string): RootNode {
       }
 
       if (matchIndex === NOT_FOUND) {
-        throw new Error(`No start tag found for template end tag "${endNode.originalText}".`);
+        throw new Error(`No start tag found for template end tag "{% ${endNode.content} %}".`);
       }
       if (matchIndex !== stack.length - 1) {
         const innerOpen = stack.at(-1)!.start;
         throw new Error(
-          `Unexpected template end tag "${endNode.originalText}" while "${innerOpen.originalText}" is still open.`,
+          `Unexpected template end tag "{% ${endNode.content} %}" while "{% ${innerOpen.content} %}" is still open.`,
         );
       }
 
@@ -668,19 +670,19 @@ export function parse(text: string): RootNode {
       const content = frame.parts.join("");
       const blockText = text.slice(frame.start.sourceStart, token.end);
       const blockId = markerAllocator.allocate(
-        protectedMarkerKindForToken(token, !frame.start.inTag && !frame.start.inAttribute),
+        protectedMarkerKindForToken(token, frame.start.hostContext === "document-flow"),
       );
       const blockNode: TemplateBlockNode = {
         type: "template-block",
         id: blockId,
-        content,
-        originalText: blockText,
+        html: content,
+        sourceText: blockText,
         preNewLines: frame.start.preNewLines,
         sourceStart: frame.start.sourceStart,
         sourceEnd: token.end,
         nodes,
         protectedMarkerKind:
-          frame.start.inTag || frame.start.inAttribute || frame.start.preserveOriginalText
+          frame.start.hostContext !== "document-flow" || frame.start.preserveOriginalText
             ? "inline"
             : "block",
         preserveOriginalText: frame.start.preserveOriginalText,
@@ -688,23 +690,24 @@ export function parse(text: string): RootNode {
         end: endNode,
         childIds: frame.childIds,
         containsNewLines: /\n/.test(blockText),
-        inTag: frame.start.inTag,
-        inAttribute: frame.start.inAttribute,
+        hostContext: frame.start.hostContext,
       };
-      const parentBlockHasHtmlMarkup = /<(?!!--)[A-Za-z/!][^>]*>/.test(content);
+      const parentBlockHasHtmlMarkup = scanHtmlHostContexts(content).tags.length > 0;
       frame.start.parentBlockId = blockId;
       endNode.parentBlockId = blockId;
       endNode.parentBlockRelationship = "end";
-      endNode.parentBlockInTag = blockNode.inTag;
-      endNode.parentBlockInAttribute = blockNode.inAttribute;
-      endNode.parentBlockHasHtmlMarkup = parentBlockHasHtmlMarkup;
+      endNode.parentBlockContext = {
+        host: blockNode.hostContext,
+        hasHtmlMarkup: parentBlockHasHtmlMarkup,
+      };
       for (const childId of frame.childIds) {
         const child = nodes[childId];
         child.parentBlockId = blockId;
         child.parentBlockRelationship = "content";
-        child.parentBlockInTag = blockNode.inTag;
-        child.parentBlockInAttribute = blockNode.inAttribute;
-        child.parentBlockHasHtmlMarkup = parentBlockHasHtmlMarkup;
+        child.parentBlockContext = {
+          host: blockNode.hostContext,
+          hasHtmlMarkup: parentBlockHasHtmlMarkup,
+        };
       }
       nodes[blockId] = blockNode;
       append(blockId, blockId);
@@ -729,9 +732,9 @@ export function parse(text: string): RootNode {
     }
   }
 
-  root.content = rootParts.join("");
+  root.html = rootParts.join("");
   if (!preserveOriginalText) {
     protectHtmlComments(root, htmlComments, markerAllocator);
   }
-  return root;
+  return finishDocument(root);
 }

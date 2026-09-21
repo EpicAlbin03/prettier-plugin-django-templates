@@ -91,7 +91,7 @@ describe("source locations", () => {
       "{{ value }}",
       "{{ item }}",
     ]);
-    expect(root.content).toBe(
+    expect(root.html).toBe(
       `${ifStart.id}\n<div>${expressions[0].id}</div>\n${forStart.id}\n<span>${expressions[1].id}</span>`,
     );
     expect(await format(source, prettierOptions)).toBe(

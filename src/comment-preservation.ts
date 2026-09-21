@@ -1,4 +1,8 @@
-import type { DjangoNode, RootNode, TemplateBlockNode } from "./ast.js";
+import type {
+  DraftNode as DjangoNode,
+  DraftRoot as RootNode,
+  DraftBlock as TemplateBlockNode,
+} from "./ast-builders.js";
 import { ANY_MARKER_SOURCE, InternalMarkerAllocator } from "./internal-markers.js";
 
 interface SourceRange {
@@ -92,7 +96,7 @@ export function protectHtmlComments(
   const affected = comments.filter((comment) => comment.hasTemplateSyntax);
   if (affected.length === 0) return;
 
-  const source = root.originalText;
+  const source = root.sourceText;
   const byStart = Object.values(root.nodes).sort((a, b) => a.sourceStart - b.sourceStart);
   const byEnd = [...byStart].sort((a, b) => a.sourceEnd - b.sourceEnd);
   const ranges: SourceRange[] = [];
@@ -160,19 +164,20 @@ export function protectHtmlComments(
       if (child.sourceStart >= range.end) break;
       if (child.sourceEnd <= range.end) child.preserveOriginalText = true;
     }
-    const originalText = source.slice(range.start, range.end);
+    const sourceText = source.slice(range.start, range.end);
     const id = allocator.allocate("inline");
     const preserved: DjangoNode = {
       type: "raw-block",
       id,
-      content: originalText,
-      originalText,
-      body: range.end === source.length && hasUnclosedEnding ? undefined : originalText,
+      content: sourceText,
+      sourceText,
+      body: range.end === source.length && hasUnclosedEnding ? undefined : sourceText,
       preserveOriginalText: true,
       preNewLines: 0,
       sourceStart: range.start,
       sourceEnd: range.end,
       protectedMarkerKind: "inline",
+      hostContext: "document-flow",
     };
     root.nodes[id] = preserved;
     const entries = replacements.get(container) ?? [];
@@ -183,7 +188,7 @@ export function protectHtmlComments(
   for (const [container, preserved] of replacements) {
     const entries: DjangoNode[] = [...preserved];
     let rangeIndex = 0;
-    for (const match of container.content.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))) {
+    for (const match of container.html.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))) {
       const child = root.nodes[match[0]];
       if (!child) continue;
       while (preserved[rangeIndex] && preserved[rangeIndex].sourceEnd <= child.sourceStart) {
@@ -207,7 +212,7 @@ export function protectHtmlComments(
       cursor = child.sourceEnd;
     }
     parts.push(source.slice(cursor, end));
-    container.content = parts.join("");
+    container.html = parts.join("");
     if (container.type === "template-block") {
       container.childIds = entries.map((child) => child.id);
     }

@@ -2,7 +2,67 @@ import { findProtectedTemplateRegionEnd } from "./template-regions.js";
 
 export type HtmlHostContext = "document-flow" | "start-tag" | "attribute-value";
 
+export interface HtmlTag {
+  readonly start: number;
+  readonly end: number;
+  readonly name: string;
+  readonly closing: boolean;
+  readonly selfClosing: boolean;
+  readonly depth: number;
+  readonly attributes: readonly string[];
+}
+
+export const BLOCK_FLOW_ELEMENTS = new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "body",
+  "caption",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figure",
+  "footer",
+  "form",
+  "head",
+  "header",
+  "hgroup",
+  "html",
+  "li",
+  "main",
+  "menu",
+  "nav",
+  "ol",
+  "section",
+  "select",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+]);
+
+export function isInlineHtmlElement(name: string | undefined): boolean {
+  return Boolean(name && !BLOCK_FLOW_ELEMENTS.has(name));
+}
+
+type RawTextElement = "script" | "style" | "textarea" | "title" | "template";
+
 export interface HtmlHostContextIndex {
+  readonly tags: readonly HtmlTag[];
+  readonly comments: readonly { readonly start: number; readonly end: number }[];
+  readonly balance:
+    | { readonly unclosed: readonly string[]; readonly unexpectedClosings: readonly string[] }
+    | undefined;
   at(offset: number): HtmlHostContext;
   isDocumentFlowNormalizationSafeAt(offset: number): boolean;
   isPreformattedAt(offset: number): boolean;
@@ -42,11 +102,7 @@ function fillContext(contexts: Uint8Array, from: number, to: number, context: nu
   contexts.fill(context, from, to);
 }
 
-function isRawTextClosingTag(
-  source: string,
-  offset: number,
-  element: "script" | "style" | "textarea",
-): boolean {
+function isRawTextClosingTag(source: string, offset: number, element: RawTextElement): boolean {
   let cursor = offset + 1;
   if (source[cursor] !== "/") {
     return false;
@@ -61,9 +117,9 @@ function isRawTextClosingTag(
   return /[\s>]/.test(source[cursor + element.length] ?? "");
 }
 
-function findDeclarationEnd(source: string, from: number): number {
+export function findHtmlTagEnd(source: string, tagStart: number): number | undefined {
   let quote: '"' | "'" | undefined;
-  for (let offset = from; offset < source.length; offset += 1) {
+  for (let offset = tagStart + 1; offset < source.length; offset += 1) {
     const char = source[offset];
     if (quote) {
       if (char === quote) {
@@ -72,10 +128,10 @@ function findDeclarationEnd(source: string, from: number): number {
     } else if (char === '"' || char === "'") {
       quote = char;
     } else if (char === ">") {
-      return offset + 1;
+      return offset;
     }
   }
-  return source.length;
+  return undefined;
 }
 
 /**
@@ -88,11 +144,15 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
   let inTag = false;
   let quote: '"' | "'" | undefined;
   let tagStart = -1;
-  let rawTextElement: "script" | "style" | "textarea" | undefined;
+  let rawTextElement: RawTextElement | undefined;
   const preformatted = new Uint8Array(source.length);
   let preformattedStart: number | undefined;
   let preDepth = 0;
   const elements: string[] = [];
+  const tags: HtmlTag[] = [];
+  const comments: Array<{ start: number; end: number }> = [];
+  const unexpectedClosings: string[] = [];
+  let incomplete = false;
   const elementChanges: Array<{ offset: number; name: string | undefined }> = [];
 
   for (let offset = 0; offset < source.length; offset += 1) {
@@ -147,6 +207,8 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
     if (!inTag && source.startsWith("<!--", offset)) {
       const close = source.indexOf("-->", offset + 4);
       const end = close === -1 ? source.length : close + 3;
+      incomplete ||= close === -1;
+      comments.push({ start: offset, end });
       fillContext(contexts, offset, end, DOCUMENT_FLOW);
       fillContext(documentFlowNormalizationSafety, offset, end, 0);
       offset = end - 1;
@@ -154,7 +216,9 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
     }
 
     if (!inTag && (source.startsWith("<!", offset) || source.startsWith("<?", offset))) {
-      const end = findDeclarationEnd(source, offset + 2);
+      const tagEnd = findHtmlTagEnd(source, offset);
+      incomplete ||= tagEnd === undefined;
+      const end = tagEnd === undefined ? source.length : tagEnd + 1;
       fillContext(contexts, offset, end, DOCUMENT_FLOW);
       fillContext(documentFlowNormalizationSafety, offset, end, 0);
       offset = end - 1;
@@ -180,22 +244,40 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
       const tag = tagText.match(/^<\s*(\/?)\s*([A-Za-z][A-Za-z0-9:-]*)/);
       if (tag) {
         const name = tag[2].toLowerCase();
-        if (tag[1] === "/") {
-          const matchingIndex = elements.lastIndexOf(name);
-          if (matchingIndex !== -1) {
-            elements.length = matchingIndex;
+        const closing = tag[1] === "/";
+        const selfClosing = /\/\s*>$/.test(tagText) || HTML_VOID_ELEMENTS.has(name);
+        tags.push({
+          start: tagStart,
+          end: offset + 1,
+          name,
+          closing,
+          selfClosing,
+          depth: elements.length,
+          attributes: closing
+            ? []
+            : splitHtmlAttributes(tagText.slice(tag[0].length).replace(/\/?\s*>$/, "")),
+        });
+        if (closing) {
+          if (elements.at(-1) === name) {
+            elements.pop();
+          } else {
+            unexpectedClosings.push(name);
           }
-        } else if (!/\/\s*>$/.test(tagText) && !HTML_VOID_ELEMENTS.has(name)) {
+        } else if (!selfClosing) {
           elements.push(name);
         }
         elementChanges.push({ offset: offset + 1, name: elements.at(-1) });
       }
-      const openingRawTextTag = tagText.match(/^<\s*(script|style|textarea)(?=[\s/>])/i)?.[1];
+      const openingRawTextTag = tagText.match(
+        /^<\s*(script|style|textarea|title|template)(?=[\s/>])/i,
+      )?.[1];
       const normalizedRawTextTag = openingRawTextTag?.toLowerCase();
       if (
         (normalizedRawTextTag === "script" ||
           normalizedRawTextTag === "style" ||
-          normalizedRawTextTag === "textarea") &&
+          normalizedRawTextTag === "textarea" ||
+          normalizedRawTextTag === "title" ||
+          normalizedRawTextTag === "template") &&
         !/\/\s*>$/.test(tagText)
       ) {
         rawTextElement = normalizedRawTextTag;
@@ -228,6 +310,9 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
   }
 
   return {
+    tags,
+    comments,
+    balance: incomplete || inTag ? undefined : { unclosed: elements, unexpectedClosings },
     at(offset: number): HtmlHostContext {
       return contextNames[contexts[offset] ?? DOCUMENT_FLOW];
     },
@@ -251,4 +336,42 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
       return elementChanges[low - 1]?.name;
     },
   };
+}
+
+export function splitHtmlAttributes(content: string): string[] {
+  const attributes: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | undefined;
+
+  for (const char of content) {
+    if (quote) {
+      current += char;
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        attributes.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current) {
+    attributes.push(current);
+  }
+
+  return attributes;
 }

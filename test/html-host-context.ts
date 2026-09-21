@@ -147,11 +147,10 @@ describe("HTML host context scanner", () => {
     const after = Object.values(root.nodes).find(
       (node) => node.type === "expression" && node.content.trim() === "after",
     );
-    expect(after?.inTag).toBe(false);
-    expect(after?.inAttribute).toBe(false);
+    expect(after?.hostContext).toBe("document-flow");
   });
 
-  test("tracks post-render normalization safety independently of lexical host context", () => {
+  test("tracks whitespace normalization safety independently of lexical host context", () => {
     const source = `<div {% firstof a b %}><script>{{ value }}{% if enabled %}</script>text`;
     const contexts = scanHtmlHostContexts(source);
     expect(contexts.isDocumentFlowNormalizationSafeAt(offsetOf(source, "{% firstof"))).toBe(true);
@@ -210,14 +209,13 @@ describe("HTML host context scanner", () => {
       '<div {{ attrs }} title="{{ label }}{% if suffix %}-{{ suffix }}{% endif %}"><script>const html = "<fake>"; {{ payload }}</script></div>';
     const contexts = scanHtmlHostContexts(source);
     const root = parse(source);
-    const contextForNode = (node: DjangoNode): HtmlHostContext =>
-      node.inAttribute ? "attribute-value" : node.inTag ? "start-tag" : "document-flow";
+    const contextForNode = (node: DjangoNode): HtmlHostContext => node.hostContext;
 
     for (const node of Object.values(root.nodes)) {
       if (node.type === "root" || node.type === "template-block") {
         continue;
       }
-      expect(contextForNode(node), node.originalText).toBe(contexts.at(node.sourceStart));
+      expect(contextForNode(node), node.sourceText).toBe(contexts.at(node.sourceStart));
     }
 
     const formatted = await format(source, {

@@ -1,3 +1,4 @@
+import type { DjangoNode } from "./ast.js";
 export type InternalMarkerKind = "inline" | "block" | "attr" | "temporary-run";
 
 export const INLINE_MARKER_SOURCE = String.raw`DJ\d+X`;
@@ -76,4 +77,17 @@ export class InternalMarkerAllocator {
 
     return value.replace(new RegExp(escapeMarkerForRegExp(marker), "g"), () => replacement);
   }
+}
+
+export function markerEntries(
+  value: string,
+  nodes: Readonly<Record<string, DjangoNode>>,
+): Array<{ id: string; index: number }> {
+  const entries: Array<{ id: string; index: number }> = [];
+  for (const match of value.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))) {
+    if (nodes[match[0]]) {
+      entries.push({ id: match[0], index: match.index });
+    }
+  }
+  return entries;
 }

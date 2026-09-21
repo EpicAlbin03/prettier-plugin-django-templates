@@ -30,7 +30,7 @@ describe("quoted template tag arguments", () => {
       const tags = Object.values(root.nodes).filter((node) => node.type === "template-tag");
       expect(tags).toHaveLength(1);
       expect(tags[0]).toMatchObject({
-        originalText: normalized,
+        sourceText: source,
         sourceStart: 0,
         sourceEnd: source.length,
       });
@@ -55,8 +55,7 @@ test("resumes attribute parsing after a case-insensitive raw-text closing tag wi
   );
   expect(expressions).toHaveLength(1);
   expect(expressions[0]).toMatchObject({
-    inTag: true,
-    inAttribute: true,
+    hostContext: "attribute-value",
     sourceStart: source.indexOf("{{"),
     sourceEnd: source.indexOf("}}") + 2,
   });
@@ -66,7 +65,7 @@ test.each(["<script></", "<script></script", "<"])(
   "accepts truncated markup without inventing template constructs: %s",
   (source) => {
     const root = parse(source);
-    expect(root).toMatchObject({ sourceStart: 0, sourceEnd: source.length, originalText: source });
+    expect(root).toMatchObject({ sourceStart: 0, sourceEnd: source.length, sourceText: source });
     expect(Object.values(root.nodes)).toEqual([]);
   },
 );
@@ -87,7 +86,7 @@ describe("incomplete preserved regions", () => {
     expect(nodes).toHaveLength(1);
     expect(nodes[0]).toMatchObject({
       type: "raw-block",
-      originalText: source,
+      sourceText: source,
       sourceStart: 0,
       sourceEnd: source.length,
       body: undefined,
@@ -105,7 +104,7 @@ describe("incomplete preserved regions", () => {
       expect(nodes[1]).toMatchObject({
         sourceStart: source.indexOf("{{"),
         sourceEnd: source.length,
-        originalText: "{{ value }}",
+        sourceText: "{{ value }}",
       });
     },
   );
@@ -119,7 +118,7 @@ test.each([
   expect(
     Object.values(parse(source).nodes).find((node) => node.type === "template-tag"),
   ).toMatchObject({
-    originalText: "{% include 'card.html' %}",
+    sourceText: "{% include 'card.html' %}",
     sourceStart: region.length + 2,
     sourceEnd: source.length - 1,
   });
