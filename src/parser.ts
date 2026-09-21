@@ -197,6 +197,7 @@ function tokenize(text: string) {
   const templatePattern = /{{[^\n]*?}}|{#[^\n]*?#}|{%[^\n]*?%}/y;
   let cursor = 0;
   let preserveOriginalText = false;
+  let htmlCommentEnd = 0;
 
   while (cursor < text.length) {
     const hostContext = hostContexts.at(cursor);
@@ -210,6 +211,7 @@ function tokenize(text: string) {
       text.startsWith(opener, cursor),
     );
     if (ignoreDelimiter) {
+      preserveOriginalText ||= cursor < htmlCommentEnd;
       const { end, closed } = findIgnoreRegionEnd(
         text,
         cursor + ignoreDelimiter.opener.length,
@@ -230,7 +232,10 @@ function tokenize(text: string) {
     }
 
     if (text.startsWith("<!--", cursor)) {
-      const end = readUntil(text, cursor + 4, "-->");
+      if (cursor >= htmlCommentEnd) {
+        htmlCommentEnd = readUntil(text, cursor + 4, "-->");
+      }
+      const end = Math.min(htmlCommentEnd, findNextSpecial(text, cursor + 4, specialPattern));
       const raw = text.slice(cursor, end);
       tokens.push(createTextToken(raw, cursor, end, tokenState));
       cursor = end;
@@ -239,6 +244,9 @@ function tokenize(text: string) {
 
     templatePattern.lastIndex = cursor;
     const templateMatch = templatePattern.exec(text);
+    // HTML comments protect formatting, not Django syntax. A block may cross their edges,
+    // so avoid passing fragments of that comment to the HTML printer while still validating it.
+    preserveOriginalText ||= Boolean(templateMatch) && cursor < htmlCommentEnd;
     if (!templateMatch && /^{[{#%]/.test(text.slice(cursor, cursor + 2))) {
       // Formatting literal delimiters could remove the LF that prevents Django recognition.
       // Preserve the document, but keep scanning so nested valid constructs are still parsed.

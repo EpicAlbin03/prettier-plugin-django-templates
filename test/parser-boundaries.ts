@@ -72,11 +72,9 @@ test.each(["<script></", "<script></script", "<"])(
 );
 
 describe("incomplete preserved regions", () => {
-  test("an unclosed HTML comment consumes template-looking text through EOF", () => {
+  test("an unclosed HTML comment does not suppress active Django tags", () => {
     const source = "before <!-- {{ unfinished {% endif %}";
-    const root = parse(source);
-    expect(Object.values(root.nodes)).toEqual([]);
-    expect(root).toMatchObject({ originalText: source, sourceStart: 0, sourceEnd: source.length });
+    expect(() => parse(source)).toThrow('No start tag found for template end tag "{% endif %}".');
   });
 
   test.each([
