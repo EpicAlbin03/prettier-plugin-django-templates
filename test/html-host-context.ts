@@ -124,6 +124,17 @@ describe("HTML host context scanner", () => {
     }
   });
 
+  test.each([
+    '{{\n <span title="{{ value }}">text</span> }}',
+    '{#\n <span title="{{ value }}">text</span> #}',
+    '{%\n <span title="{{ value }}">text</span> %}',
+    '{# unfinished<span title="{{ value }}">text</span>',
+  ])("does not hide HTML inside literal Django delimiters: %j", (source) => {
+    const contexts = scanHtmlHostContexts(source);
+    expect(contexts.at(source.indexOf("{{ value }}"))).toBe("attribute-value");
+    expect(contexts.elementAt(source.indexOf("text"))).toBe("span");
+  });
+
   test("protects complete raw bodies and ignore regions from affecting later context", async () => {
     const source = `{% verbatim %}<fake title="{% endverbatim %}
 <!-- prettier-ignore-start --><broken value='<!-- prettier-ignore-end -->

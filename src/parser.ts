@@ -80,12 +80,9 @@ type Token =
   | TagToken
   | RawBlockToken;
 
-function readUntil(text: string, start: number, endToken: string, errorMessage?: string): number {
+function readUntil(text: string, start: number, endToken: string): number {
   const end = text.indexOf(endToken, start);
   if (end === -1) {
-    if (errorMessage) {
-      throw new Error(errorMessage);
-    }
     return text.length;
   }
   return end + endToken.length;
@@ -192,11 +189,14 @@ function findIgnoreRegionEnd(
     : { end: closerStart + delimiter.closer.length, closed: true };
 }
 
-function tokenize(text: string): Token[] {
+function tokenize(text: string) {
   const hostContexts = scanHtmlHostContexts(text);
   const tokens: Token[] = [];
   const specialPattern = /{{|{#|{%|<!--/g;
+  // Python's non-DOTALL dot excludes LF, but permits CR and Unicode line separators.
+  const templatePattern = /{{[^\n]*?}}|{#[^\n]*?#}|{%[^\n]*?%}/y;
   let cursor = 0;
+  let preserveOriginalText = false;
 
   while (cursor < text.length) {
     const hostContext = hostContexts.at(cursor);
@@ -237,13 +237,20 @@ function tokenize(text: string): Token[] {
       continue;
     }
 
+    templatePattern.lastIndex = cursor;
+    const templateMatch = templatePattern.exec(text);
+    if (!templateMatch && /^{[{#%]/.test(text.slice(cursor, cursor + 2))) {
+      // Formatting literal delimiters could remove the LF that prevents Django recognition.
+      // Preserve the document, but keep scanning so nested valid constructs are still parsed.
+      preserveOriginalText = true;
+      const end = findNextSpecial(text, cursor + 1, specialPattern);
+      tokens.push(createTextToken(text.slice(cursor, end), cursor, end, tokenState));
+      cursor = end;
+      continue;
+    }
+
     if (text.startsWith("{{", cursor)) {
-      const end = readUntil(
-        text,
-        cursor + 2,
-        "}}",
-        `Unterminated template expression starting at index ${cursor}.`,
-      );
+      const end = cursor + templateMatch![0].length;
       const raw = text.slice(cursor, end);
       tokens.push({
         type: "Expression",
@@ -258,12 +265,7 @@ function tokenize(text: string): Token[] {
     }
 
     if (text.startsWith("{#", cursor)) {
-      const end = readUntil(
-        text,
-        cursor + 2,
-        "#}",
-        `Unterminated template comment starting at index ${cursor}.`,
-      );
+      const end = cursor + templateMatch![0].length;
       const raw = text.slice(cursor, end);
       tokens.push({
         type: "Comment",
@@ -278,12 +280,7 @@ function tokenize(text: string): Token[] {
     }
 
     if (text.startsWith("{%", cursor)) {
-      const end = readUntil(
-        text,
-        cursor + 2,
-        "%}",
-        `Unterminated template tag starting at index ${cursor}.`,
-      );
+      const end = cursor + templateMatch![0].length;
       const raw = text.slice(cursor, end);
       const tag = createTagToken(raw, cursor, end, tokenState);
 
@@ -335,7 +332,7 @@ function tokenize(text: string): Token[] {
     cursor = next;
   }
 
-  return tokens;
+  return { tokens, preserveOriginalText };
 }
 
 function countPreNewLines(text: string, to: number): number {
@@ -457,7 +454,7 @@ interface OpenBlock {
 }
 
 export function parse(text: string): RootNode {
-  const tokens = tokenize(text);
+  const { tokens, preserveOriginalText } = tokenize(text);
   const standaloneTagsWithLaterEnds = getStandaloneTagsWithLaterEnds(tokens);
   const nodes: Record<string, DjangoNode> = {};
   const rootParts: string[] = [];
@@ -466,6 +463,7 @@ export function parse(text: string): RootNode {
     id: "root",
     content: "",
     originalText: text,
+    preserveOriginalText,
     preNewLines: 0,
     sourceStart: 0,
     sourceEnd: text.length,

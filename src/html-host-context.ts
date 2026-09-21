@@ -122,10 +122,14 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
     const protectedEnd = protectedConstructEnds.get(source.slice(offset, offset + 2));
     if (protectedEnd) {
       const close = source.indexOf(protectedEnd, offset + 2);
-      const end = close === -1 ? source.length : close + protectedEnd.length;
-      fillContext(contexts, offset, end, context);
-      offset = end - 1;
-      continue;
+      // Django's non-DOTALL lexer leaves LF-spanning and unclosed delimiters literal.
+      // Their text can contain real HTML or another valid template construct.
+      if (close !== -1 && !source.slice(offset, close).includes("\n")) {
+        const end = close + protectedEnd.length;
+        fillContext(contexts, offset, end, context);
+        offset = end - 1;
+        continue;
+      }
     }
 
     // Textarea content is text, not markup, but Django constructs still need scanning.

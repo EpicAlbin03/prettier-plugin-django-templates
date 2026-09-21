@@ -28,30 +28,22 @@ export function findRawBodyEnd(
   name: string,
   openingContent: string,
 ): RawBodyEnd | undefined {
-  let cursor = from;
-
-  while (cursor < source.length) {
-    const tagStart = source.indexOf("{%", cursor);
-    if (tagStart === -1) {
-      return undefined;
+  // Match Django's lexer: a delimiter cannot span LF, including a raw body's terminator.
+  const constructs = /{%[^\n]*?%}|{{[^\n]*?}}|{#[^\n]*?#}/g;
+  constructs.lastIndex = from;
+  for (let match = constructs.exec(source); match; match = constructs.exec(source)) {
+    if (!match[0].startsWith("{%")) {
+      continue;
     }
-
-    const closeDelimiter = source.indexOf("%}", tagStart + 2);
-    if (closeDelimiter === -1) {
-      return undefined;
-    }
-
-    const tagContent = source.slice(tagStart + 2, closeDelimiter).trim();
+    const tagContent = match[0].slice(2, -2).trim();
     const [, ...rest] = tagContent.split(/\s+/);
     if (matchesRawBodyEnd(name, openingContent, tagContent)) {
       return {
-        end: closeDelimiter + 2,
-        closingStart: tagStart,
+        end: match.index + match[0].length,
+        closingStart: match.index,
         endArgs: rest.join(" "),
       };
     }
-
-    cursor = closeDelimiter + 2;
   }
 
   return undefined;
@@ -78,7 +70,7 @@ export function findProtectedTemplateRegionEnd(
   }
 
   const openingEnd = source.indexOf("%}", offset + 2);
-  if (openingEnd === -1) {
+  if (openingEnd === -1 || source.slice(offset, openingEnd).includes("\n")) {
     return undefined;
   }
   const openingContent = source.slice(offset + 2, openingEnd).trim();
