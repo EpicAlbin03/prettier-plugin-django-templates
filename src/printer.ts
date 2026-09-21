@@ -30,18 +30,6 @@ const { builders, printer, utils } = doc;
 const { mapDoc } = utils;
 const { printDocToString } = printer;
 
-function getProtectedMarkerIds(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-): string[] {
-  if ("childIds" in node) {
-    return node.childIds;
-  }
-
-  return [...node.content.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))].flatMap((match) =>
-    node.nodes[match[0]] ? [match[0]] : [],
-  );
-}
-
 function markerEntries(
   value: string,
   nodes: Record<string, DjangoNode>,
@@ -163,28 +151,20 @@ function findHtmlTagEnd(content: string, tagStart: number): number | undefined {
   return undefined;
 }
 
-function isBalancedTopLevelHtml(content: string): boolean {
+function getHtmlFragmentBalance(content: string) {
   const stack: string[] = [];
-  const rawTextElements = new Set(["script", "style", "template"]);
+  const unexpectedClosings: string[] = [];
+  const rawTextElements = new Set(["script", "style", "textarea", "title", "template"]);
   let cursor = 0;
 
   while (cursor < content.length) {
-    if (content.startsWith("<!--", cursor)) {
-      const commentEnd = content.indexOf("-->", cursor + 4);
-      if (commentEnd === -1) {
-        return false;
-      }
-      cursor = commentEnd + 3;
-      continue;
-    }
-
     const currentRawElement = stack.at(-1);
     if (currentRawElement && rawTextElements.has(currentRawElement)) {
       const rawEnd = new RegExp(`</${currentRawElement}\\s*>`, "gi");
       rawEnd.lastIndex = cursor;
       const match = rawEnd.exec(content);
       if (!match) {
-        return false;
+        break;
       }
       stack.pop();
       cursor = match.index + match[0].length;
@@ -198,15 +178,15 @@ function isBalancedTopLevelHtml(content: string): boolean {
     if (content.startsWith("<!--", tagStart)) {
       const commentEnd = content.indexOf("-->", tagStart + 4);
       if (commentEnd === -1) {
-        return false;
+        return undefined;
       }
       cursor = commentEnd + 3;
       continue;
     }
     if (content.startsWith("<!", tagStart) || content.startsWith("<?", tagStart)) {
-      const declarationEnd = content.indexOf(">", tagStart + 2);
-      if (declarationEnd === -1) {
-        return false;
+      const declarationEnd = findHtmlTagEnd(content, tagStart);
+      if (declarationEnd === undefined) {
+        return undefined;
       }
       cursor = declarationEnd + 1;
       continue;
@@ -214,7 +194,7 @@ function isBalancedTopLevelHtml(content: string): boolean {
 
     const tagEnd = findHtmlTagEnd(content, tagStart);
     if (tagEnd === undefined) {
-      return false;
+      return undefined;
     }
 
     const tagText = content.slice(tagStart, tagEnd + 1);
@@ -228,16 +208,24 @@ function isBalancedTopLevelHtml(content: string): boolean {
     const name = tag[2].toLowerCase();
     if (closing) {
       if (stack.at(-1) !== name) {
-        return false;
+        unexpectedClosings.push(name);
+      } else {
+        stack.pop();
       }
-      stack.pop();
     } else if (!/\/\s*>$/.test(tagText) && !HTML_VOID_ELEMENTS.has(name)) {
       stack.push(name);
     }
     cursor = tagEnd + 1;
   }
 
-  return stack.length === 0;
+  return { unclosed: stack, unexpectedClosings };
+}
+
+function isBalancedTopLevelHtml(content: string): boolean {
+  const balance = getHtmlFragmentBalance(content);
+  return Boolean(
+    balance && balance.unclosed.length === 0 && balance.unexpectedClosings.length === 0,
+  );
 }
 
 function findInlineOnlyStandaloneElements(
@@ -879,6 +867,150 @@ const BLOCK_FLOW_ELEMENTS = new Set([
   "ul",
 ]);
 
+function expandTemplateHtml(node: RootNode | TemplateBlockNode, segment: string): string {
+  return segment.replace(new RegExp(ANY_MARKER_SOURCE, "g"), (id) => {
+    const child = node.nodes[id];
+    if (child?.type === "template-block" && !child.inTag && !child.inAttribute) {
+      return expandTemplateHtml(child, child.content);
+    }
+    return id;
+  });
+}
+
+function getTemplateHtmlFragmentBalance(
+  node: RootNode | TemplateBlockNode,
+  segment: string,
+  includeChildren = false,
+) {
+  // Start-tag constructs can touch the element name. They are attributes, not part of that name.
+  const html = (includeChildren ? expandTemplateHtml(node, segment) : segment).replace(
+    new RegExp(ATTRIBUTE_MARKER_SOURCE, "g"),
+    (id) => (node.nodes[id] ? ` ${id}` : id),
+  );
+  return getHtmlFragmentBalance(html);
+}
+
+function hasUnbalancedHtml(node: RootNode | TemplateBlockNode, includeChildren = false): boolean {
+  return splitAtTemplateTags(node).some((segment) => {
+    const balance = getTemplateHtmlFragmentBalance(node, segment, includeChildren);
+    return !balance || balance.unclosed.length > 0 || balance.unexpectedClosings.length > 0;
+  });
+}
+
+function hasAmbiguousHtmlBranches(node: RootNode | TemplateBlockNode): boolean {
+  const segments = splitAtTemplateTags(node);
+  if (segments.length > 1) {
+    const balances = segments.map((segment) => getTemplateHtmlFragmentBalance(node, segment));
+    if (
+      balances.some((balance) => balance && balance.unclosed.length > 0) &&
+      balances.some((balance) => balance && balance.unexpectedClosings.length > 0)
+    ) {
+      // An opening in one branch cannot balance a closing in another. Its effects on
+      // following content are ambiguous, even if concatenating all branches looks balanced.
+      return true;
+    }
+  }
+  return markerEntries(node.content, node.nodes).some(({ id }) => {
+    const child = node.nodes[id];
+    return (
+      child.type === "template-block" &&
+      !child.inTag &&
+      !child.inAttribute &&
+      hasAmbiguousHtmlBranches(child)
+    );
+  });
+}
+
+function hasUnbalancedHtmlChild(node: RootNode | TemplateBlockNode): boolean {
+  return markerEntries(node.content, node.nodes).some(({ id }) => {
+    const child = node.nodes[id];
+    return (
+      child.type === "template-block" &&
+      !child.inTag &&
+      !child.inAttribute &&
+      (hasUnbalancedHtml(child) || hasUnbalancedHtml(child, true))
+    );
+  });
+}
+
+/**
+ * Hiding a conditional <pre>, <textarea>, or inline wrapper from the HTML parser also
+ * hides its whitespace context. Protect the entire affected range, not just its tags.
+ * Block-flow wrappers need no such range: their balanced interior can still be formatted.
+ */
+function protectConditionalHtmlWhitespace(
+  node: RootNode | TemplateBlockNode,
+  markerAllocator: InternalMarkerAllocator,
+  source: string,
+): boolean {
+  const ranges: Array<{ start: number; end: number; sourceStart: number; sourceEnd: number }> = [];
+  const openElements: string[] = [];
+  let rangeStart: { index: number; sourceStart: number } | undefined;
+
+  for (const { id, index } of markerEntries(node.content, node.nodes)) {
+    const child = node.nodes[id];
+    if (child.type !== "template-block" || child.inTag || child.inAttribute) {
+      continue;
+    }
+
+    for (const segment of splitAtTemplateTags(child)) {
+      const balance = getTemplateHtmlFragmentBalance(child, segment, true);
+      if (!balance) {
+        return false;
+      }
+      const openings = balance.unclosed.filter((name) => !BLOCK_FLOW_ELEMENTS.has(name));
+      const closings = balance.unexpectedClosings.filter((name) => !BLOCK_FLOW_ELEMENTS.has(name));
+      if (openings.length > 0 && !rangeStart) {
+        rangeStart = { index, sourceStart: child.sourceStart };
+      }
+      openElements.push(...openings);
+      for (const name of closings) {
+        const matchingIndex = openElements.lastIndexOf(name);
+        if (matchingIndex === -1) {
+          return false;
+        }
+        openElements.splice(matchingIndex, 1);
+      }
+    }
+
+    if (rangeStart && openElements.length === 0) {
+      ranges.push({
+        start: rangeStart.index,
+        end: index + id.length,
+        sourceStart: rangeStart.sourceStart,
+        sourceEnd: child.sourceEnd,
+      });
+      rangeStart = undefined;
+    }
+  }
+
+  // Without a complete range, neither the remaining HTML nor its whitespace context is known.
+  if (rangeStart) {
+    return false;
+  }
+
+  for (const range of ranges.reverse()) {
+    const originalText = source.slice(range.sourceStart, range.sourceEnd);
+    const id = markerAllocator.allocate("inline");
+    node.nodes[id] = {
+      type: "raw-block",
+      id,
+      content: originalText,
+      originalText,
+      body: originalText,
+      preNewLines: 0,
+      sourceStart: range.sourceStart,
+      sourceEnd: range.sourceEnd,
+      protectedMarkerKind: "inline",
+    };
+    node.content = node.content.slice(0, range.start) + id + node.content.slice(range.end);
+  }
+  if (ranges.length > 0 && node.type === "template-block") {
+    node.childIds = markerEntries(node.content, node.nodes).map(({ id }) => id);
+  }
+  return true;
+}
+
 function hasSafeSingleBlockElementBody(block: TemplateBlockNode): boolean {
   const match = block.content.match(
     new RegExp(`^\\s*<([A-Za-z][^\\s/>]*)(?:[^>]*)>\\s*(${INLINE_MARKER_SOURCE})\\s*<\\/\\1>\\s*$`),
@@ -1199,7 +1331,28 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       return undefined;
     }
 
-    const ids = getProtectedMarkerIds(node);
+    // Prettier's public Options type leaves plugin-owned fields unknown, so validate this boundary.
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof
+    if (typeof options.originalText !== "string") {
+      throw new TypeError("Prettier did not provide the complete original source.");
+    }
+    const markerAllocator = new InternalMarkerAllocator(options.originalText);
+    markerAllocator.reserve(Object.keys(node.nodes));
+    if (
+      !node.inTag &&
+      !node.inAttribute &&
+      (hasAmbiguousHtmlBranches(node) ||
+        ((node.type === "template-block" || hasUnbalancedHtmlChild(node)) &&
+          hasUnbalancedHtml(node)) ||
+        (node.type === "template-block" && hasUnbalancedHtml(node, true)) ||
+        !protectConditionalHtmlWhitespace(node, markerAllocator, options.originalText))
+    ) {
+      node.preserveOriginalText = true;
+      return node.type === "root" && !node.originalText.endsWith("\n")
+        ? [node.originalText, builders.hardline]
+        : node.originalText;
+    }
+
     const containerHasHtmlMarkup = hasHtmlMarkup(node.content);
     const inlineProtectedMarkerPairs = getInlineProtectedMarkerPairs(node.content);
     const sourceMarkerEntries = markerEntries(node.content, node.nodes);
@@ -1234,13 +1387,6 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
         gapAfter: next && /^[ \t]+$/.test(betweenNext ?? "") ? betweenNext : undefined,
       });
     }
-    // Prettier's public Options type leaves plugin-owned fields unknown, so validate this boundary.
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof
-    if (typeof options.originalText !== "string") {
-      throw new TypeError("Prettier did not provide the complete original source.");
-    }
-    const markerAllocator = new InternalMarkerAllocator(options.originalText);
-    markerAllocator.reserve(ids);
     if (node.type === "template-block") {
       const expressionOnlyBlockDoc = getExpressionOnlyBlockDoc(node);
       if (expressionOnlyBlockDoc) {
@@ -1327,7 +1473,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               !currentNode.inAttribute &&
               isInsideInlineHtmlElement(node.content, sourceMarkerIndex) &&
               hasTemplateBranches(currentNode);
-            if (ignoreDoc || preserveInlineBranches) {
+            if (ignoreDoc || preserveInlineBranches || currentNode.preserveOriginalText) {
               currentNode.preserveOriginalText = true;
               return { doc: currentNode.originalText };
             }
@@ -1433,7 +1579,16 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
 
     const preservedReplacements: Array<{ token: string; value: string }> = [];
     let protectedFormatted = formatted;
-    for (const child of Object.values(node.nodes)) {
+    // Larger protected ranges can contain individual preserved fragments. Hide the range first.
+    const preservedNodes = Object.values(node.nodes)
+      .filter(
+        (child) =>
+          child.preserveOriginalText ||
+          child.type === "raw-block" ||
+          child.type === "ignore-region",
+      )
+      .sort((left, right) => right.originalText.length - left.originalText.length);
+    for (const child of preservedNodes) {
       const preservedText = child.preserveOriginalText
         ? child.originalText
         : child.type === "raw-block"
