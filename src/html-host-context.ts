@@ -154,13 +154,22 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
   const unexpectedClosings: string[] = [];
   let incomplete = false;
   const elementChanges: Array<{ offset: number; name: string | undefined }> = [];
+  const events = /[<{>"']/g;
 
   for (let offset = 0; offset < source.length; offset += 1) {
     const context = quote ? ATTRIBUTE_VALUE : inTag ? START_TAG : DOCUMENT_FLOW;
-    contexts[offset] = context;
+    // Ordinary text cannot change scanner state. Fill its context in bulk and
+    // let the regexp engine find the next potentially significant character.
+    events.lastIndex = offset;
+    const next = events.exec(source)?.index ?? source.length;
+    fillContext(contexts, offset, Math.min(next + 1, source.length), context);
+    if (rawTextElement && rawTextElement !== "textarea") {
+      fillContext(documentFlowNormalizationSafety, offset, Math.min(next + 1, source.length), 0);
+    }
+    offset = next;
+    if (offset === source.length) break;
 
     if (rawTextElement && rawTextElement !== "textarea") {
-      documentFlowNormalizationSafety[offset] = 0;
       if (source[offset] !== "<" || !isRawTextClosingTag(source, offset, rawTextElement)) {
         continue;
       }
@@ -340,37 +349,21 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
 
 export function splitHtmlAttributes(content: string): string[] {
   const attributes: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | undefined;
-
-  for (const char of content) {
-    if (quote) {
-      current += char;
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-
+  const boundaries = /[\s"']/g;
+  let start = 0;
+  for (let match = boundaries.exec(content); match; match = boundaries.exec(content)) {
+    const char = match[0];
     if (char === '"' || char === "'") {
-      quote = char;
-      current += char;
-      continue;
+      const close = content.indexOf(char, match.index + 1);
+      boundaries.lastIndex = close === -1 ? content.length : close + 1;
+    } else {
+      if (match.index > start) attributes.push(content.slice(start, match.index));
+      start = match.index + 1;
     }
-
-    if (/\s/.test(char)) {
-      if (current) {
-        attributes.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += char;
   }
 
-  if (current) {
-    attributes.push(current);
+  if (start < content.length) {
+    attributes.push(content.slice(start));
   }
 
   return attributes;

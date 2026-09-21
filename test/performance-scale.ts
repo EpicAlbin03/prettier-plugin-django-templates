@@ -71,6 +71,26 @@ describe("generated scale coverage", () => {
     expect(first.html).not.toContain("{% if value %}");
   });
 
+  test("tracks newlines across nested blocks without changing source ranges", () => {
+    const depth = 2_000;
+    for (const body of ["x", "\nx", "x\n", "\r", "\u2028", "{# a\nb #}"]) {
+      const source = `\n${"{% if value %}".repeat(depth)}${body}${"{% endif %}".repeat(depth)}\n`;
+      const root = parse(source);
+      const blocks = Object.values(root.nodes).filter((node) => node.type === "template-block");
+      expect(blocks).toHaveLength(depth);
+      for (const block of blocks) {
+        expect(block.containsNewLines).toBe(body.includes("\n"));
+        expect(block.sourceText).toBe(source.slice(block.sourceStart, block.sourceEnd));
+      }
+    }
+    const siblings = parse("{% if a %}\nx{% endif %}{% if b %}y{% endif %}");
+    expect(
+      Object.values(siblings.nodes)
+        .filter((node) => node.type === "template-block")
+        .map((node) => node.containsNewLines),
+    ).toEqual([true, false]);
+  });
+
   test("formats marker-heavy attribute values idempotently", async () => {
     const count = 500;
     const source = `<div title="${Array.from(

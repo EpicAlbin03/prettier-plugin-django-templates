@@ -658,6 +658,7 @@ export interface ContainerPlan {
   readonly boundaries: readonly Readonly<SegmentBoundary>[];
   readonly preparedSegments: readonly PreparedSegment[];
   readonly leadingStandaloneSplit?: readonly string[];
+  readonly blockSequence?: readonly string[];
   readonly preserved?: PreservedSpan;
   readonly finalNewline: boolean;
 }
@@ -703,6 +704,31 @@ function ignoredSourceRanges(source: string, html: HtmlHostContextIndex, ordered
  * their allocation is finished before Prettier starts embedding any child.
  */
 export function analyzeDocument(root: RootNode): DocumentPlan {
+  // With no Django constructs or marker-like literals, HTML owns the entire
+  // document. There are no preservation decisions or projections to analyze.
+  if (
+    !root.preserveOriginalText &&
+    Object.keys(root.nodes).length === 0 &&
+    !new RegExp(ANY_MARKER_SOURCE).test(root.html)
+  ) {
+    return {
+      containers: new Map([
+        [
+          root.id,
+          {
+            node: root,
+            body: { kind: "html" },
+            markerContexts: new Map(),
+            segments: [root.html],
+            boundaries: [{ before: "none", after: 0 }],
+            preparedSegments: [{ segment: root.html, beforeReplacements: [] }],
+            finalNewline: true,
+          },
+        ],
+      ]),
+      preserved: new Map(),
+    };
+  }
   const allocator = new InternalMarkerAllocator(root.sourceText);
   allocator.reserve(Object.keys(root.nodes));
   const nodes = { ...root.nodes };
@@ -852,6 +878,23 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
         ? splitTopLevelInlineOnlyStandaloneElements(node, splitSegments)
         : splitSegments;
     const ending = entries.at(-1);
+    // A sequence of block markers on separate lines needs no HTML parser. Keep
+    // every other whitespace shape on the normal path, including blank lines.
+    const blockSequence =
+      ending &&
+      /^[ \t\r\n]*$/.test(node.html.slice(ending.index + ending.id.length)) &&
+      entries.every(({ id, index }, entryIndex) => {
+        const child = nodes[id];
+        const previous = entries[entryIndex - 1];
+        const gap = node.html.slice(previous ? previous.index + previous.id.length : 0, index);
+        return (
+          child.type === "template-block" &&
+          child.protectedMarkerKind === "block" &&
+          (previous ? /^[ \t]*\r?\n[ \t]*$/.test(gap) : /^[ \t\r\n]*$/.test(gap))
+        );
+      })
+        ? entries.map(({ id }) => id)
+        : undefined;
     const endingNode =
       ending && /^\s*$/.test(node.html.slice(ending.index + ending.id.length))
         ? nodes[ending.id]
@@ -880,6 +923,7 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       boundaries: planSegmentBoundaries(node, segments),
       preparedSegments: segments.map((segment) => prepareSegmentForHtml(node, segment, allocator)),
       leadingStandaloneSplit,
+      blockSequence,
       preserved: preservedSpan,
       finalNewline: preservedSpan
         ? preservedSpan.reason === "conditional-html" && !preservedSpan.text.endsWith("\n")

@@ -1,6 +1,7 @@
 import type { AstPath, Doc, Options, Printer } from "prettier";
 import { doc } from "prettier";
 import { scanHtmlHostContexts, splitHtmlAttributes } from "./html-host-context.js";
+import { HtmlDocCache } from "./html-doc-cache.js";
 import { containsProtectedNodeMarker, replaceProtectedMarkersInString } from "./html-adapter.js";
 import { getDocumentPlan, prepareDocument, type ContainerPlan } from "./formatting-plan.js";
 import { formatExpression, getRawBlockText } from "./template-text.js";
@@ -16,8 +17,15 @@ import type { TemplateBlockNode, DjangoNode, TemplateTagNode } from "./ast.js";
 const { builders, utils } = doc;
 const { mapDoc } = utils;
 
-export const preprocess: Printer<DjangoNode>["preprocess"] = (node) =>
-  node.type === "root" ? prepareDocument(node) : node;
+const htmlDocCaches = new WeakMap<Readonly<Record<string, DjangoNode>>, HtmlDocCache>();
+
+export const preprocess: Printer<DjangoNode>["preprocess"] = (node) => {
+  if (node.type === "root") {
+    htmlDocCaches.set(node.nodes, new HtmlDocCache(node.nodes));
+    return prepareDocument(node);
+  }
+  return node;
+};
 
 function stripProtectedMarkerContext(value: string): string {
   return value
@@ -262,18 +270,36 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       ];
     }
 
+    if (layout.blockSequence) {
+      const body = builders.join(
+        builders.hardline,
+        layout.blockSequence.map((id) => path.call(print, "nodes", id)),
+      );
+      return node.type === "template-block"
+        ? buildBlock(path, print, node, body)
+        : [body, layout.finalNewline ? builders.hardline : ""];
+    }
+
     const mapped = await Promise.all(
       segments.map(async (segment, segmentIndex) => {
         const preparedSegment = layout.preparedSegments[segmentIndex];
         const doc = node.nodes[segment]
           ? segment
-          : await textToDoc(preparedSegment.segment, {
-              ...options,
-              parser: "html",
-              htmlWhitespaceSensitivity: preparedSegment.sensitiveBody
-                ? "strict"
-                : options.htmlWhitespaceSensitivity,
-            });
+          : await htmlDocCaches
+              .get(ast.nodes)!
+              .format(
+                preparedSegment.segment,
+                textToDoc,
+                preparedSegment.sensitiveBody ? "strict" : options.htmlWhitespaceSensitivity,
+              );
+
+        if (
+          node.type === "root" &&
+          Object.keys(node.nodes).length === 0 &&
+          preparedSegment.beforeReplacements.length === 0
+        ) {
+          return doc;
+        }
 
         return mapDoc(doc, (currentDoc) => {
           // A Prettier Doc is a documented union with strings as its only text representation.

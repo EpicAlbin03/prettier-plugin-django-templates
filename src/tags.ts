@@ -193,8 +193,10 @@ register(
   { role: "standalone", flow: "document-flow" },
 );
 
+const branchNames: string[] = [];
 const knownEndNames = new Map<string, string>();
 for (const [name, descriptor] of descriptors) {
+  if (descriptor.role === "branch") branchNames.push(name);
   if (descriptor.role === "start") {
     knownEndNames.set(`end${name}`, name);
   }
@@ -306,8 +308,5 @@ export function startsDocumentFlowAfterTag(name: string): boolean {
     return false;
   }
 
-  const branchNames = [...descriptors].flatMap(([branchName, descriptor]) =>
-    descriptor.role === "branch" ? [branchName] : [],
-  );
   return branchNames.every((branchName) => !name.startsWith(branchName));
 }

@@ -117,6 +117,9 @@ function createTextToken(
 
 function normalizeTemplateTagContent(content: string): string {
   const trimmed = content.trim();
+  // Most tags already use single ASCII spaces. Quoted whitespace only makes
+  // this check conservative; the quote-aware path still handles it below.
+  if (!/[^\S ]| {2}/.test(trimmed)) return trimmed;
   let normalized = "";
   let pendingSpace = false;
   let quote: '"' | "'" | undefined;
@@ -196,6 +199,20 @@ function findIgnoreRegionEnd(
 }
 
 function tokenize(text: string) {
+  // HTML context is irrelevant when no construct can produce a Django node.
+  if (!/{[{#%]|<!-- prettier-ignore-start -->/.test(text)) {
+    return {
+      tokens: [
+        createTextToken(text, 0, text.length, {
+          inAttribute: false,
+          inTag: false,
+          inPreformatted: false,
+        }),
+      ],
+      preserveOriginalText: false,
+      htmlComments: [],
+    };
+  }
   const hostContexts = scanHtmlHostContexts(text);
   const tokens: Token[] = [];
   const specialPattern = /{{|{#|{%|<!--/g;
@@ -360,17 +377,12 @@ function tokenize(text: string) {
 }
 
 function countPreNewLines(text: string, to: number): number {
-  let from = to;
-  while (from > 0 && /\s/.test(text[from - 1])) {
-    from -= 1;
+  let count = 0;
+  while (to > 0 && /\s/.test(text[to - 1])) {
+    to -= 1;
+    if (text[to] === "\n") count += 1;
   }
-
-  const segment = text.slice(from, to);
-  if (!/^\s*$/.test(segment)) {
-    return 0;
-  }
-
-  return segment.split("\n").length - 1;
+  return count;
 }
 
 function matchesEnd(start: TemplateTagNode, endName: string): boolean {
@@ -500,7 +512,15 @@ export function parse(text: string): RootNode {
     }
   };
 
+  // Track line breaks once instead of rescanning overlapping source slices at
+  // every block closure (quadratic for deeply nested single-line templates).
+  let lastNewline = -1;
+  let nextNewline = text.indexOf("\n");
   for (const [tokenIndex, token] of tokens.entries()) {
+    while (nextNewline !== -1 && nextNewline < token.end) {
+      lastNewline = nextNewline;
+      nextNewline = text.indexOf("\n", nextNewline + 1);
+    }
     if (token.type === "Text") {
       append(token.raw);
       continue;
@@ -609,7 +629,8 @@ export function parse(text: string): RootNode {
       continue;
     }
 
-    const templateTagBase = {
+    const node: TemplateTagNode = {
+      type: "template-tag",
       id: createId(token),
       content: token.content,
       sourceText: token.raw,
@@ -625,26 +646,20 @@ export function parse(text: string): RootNode {
         : token.inTag
           ? "start-tag"
           : "document-flow",
-    } as const;
+    };
     if (token.role === "branch") {
       if (!hasMatchingBranchParent(token, stack)) {
-        throw new Error(
-          `No start tag found for template branch tag "{% ${templateTagBase.content} %}".`,
-        );
+        throw new Error(`No start tag found for template branch tag "{% ${node.content} %}".`);
       }
 
-      const node: TemplateTagNode = { type: "template-tag", ...templateTagBase };
       nodes[node.id] = node;
       append(node.id, node.id);
       continue;
     }
 
     if (actsAsEndTag(token, expectedEndCounts)) {
-      const endNode: TemplateTagNode = {
-        type: "template-tag",
-        ...templateTagBase,
-        role: "end",
-      };
+      const endNode = node;
+      endNode.role = "end";
       nodes[endNode.id] = endNode;
 
       let matchIndex = NOT_FOUND;
@@ -689,32 +704,29 @@ export function parse(text: string): RootNode {
         start: frame.start,
         end: endNode,
         childIds: frame.childIds,
-        containsNewLines: /\n/.test(blockText),
+        containsNewLines: lastNewline >= frame.start.sourceStart,
         hostContext: frame.start.hostContext,
       };
       const parentBlockHasHtmlMarkup = scanHtmlHostContexts(content).tags.length > 0;
       frame.start.parentBlockId = blockId;
       endNode.parentBlockId = blockId;
       endNode.parentBlockRelationship = "end";
-      endNode.parentBlockContext = {
+      const parentBlockContext = {
         host: blockNode.hostContext,
         hasHtmlMarkup: parentBlockHasHtmlMarkup,
       };
+      endNode.parentBlockContext = parentBlockContext;
       for (const childId of frame.childIds) {
         const child = nodes[childId];
         child.parentBlockId = blockId;
         child.parentBlockRelationship = "content";
-        child.parentBlockContext = {
-          host: blockNode.hostContext,
-          hasHtmlMarkup: parentBlockHasHtmlMarkup,
-        };
+        child.parentBlockContext = parentBlockContext;
       }
       nodes[blockId] = blockNode;
       append(blockId, blockId);
       continue;
     }
 
-    const node: TemplateTagNode = { type: "template-tag", ...templateTagBase };
     nodes[node.id] = node;
     if (token.role === "standalone" && !standaloneTagsWithLaterEnds.has(tokenIndex)) {
       append(node.id, node.id);

@@ -40,7 +40,11 @@ Plans are retained in a weak map keyed by the parsed document's dictionary, so u
 
 ## Doc construction
 
-`printer.ts` consumes the plan, delegates prepared HTML to `textToDoc`, and composes groups, indentation, and line Docs. `html-adapter.ts` substitutes markers inside HTML Doc text leaves; it does not reinterpret or render the resulting Docs. Temporary marker restoration uses literal callbacks, never replacement-string interpolation.
+`printer.ts` consumes the plan, delegates prepared HTML to `textToDoc`, and composes groups, indentation, and line Docs. Planned line-separated block-only sequences can be composed directly without HTML parsing. Ordinary HTML without template constructs or marker-like literals skips Django-specific analysis and Doc rewriting.
+
+`html-doc-cache.ts` bounds reuse of small expression-bearing HTML fragments to one formatting call. Cache keys preserve marker widths, aliasing, literal text, and whitespace sensitivity; hits substitute the current markers and freshen layout-group IDs before Django Docs are inserted. Embedded languages, attribute constructs, and HTML comments retain the ordinary HTML path. Prettier still receives the original fragment, never a canonicalized input.
+
+`html-adapter.ts` substitutes markers inside HTML Doc text leaves; it does not reinterpret or render the resulting Docs. Temporary marker restoration uses literal callbacks, never replacement-string interpolation.
 
 The root returns a composed Doc. There is no `printDocToString` call, final output scan, or post-render whitespace repair. Semantic boundaries have a planned owner, and Prettier makes the final width, indentation, and line-ending decisions.
 

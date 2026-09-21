@@ -1,7 +1,11 @@
 import { format } from "prettier";
 import { describe, expect, test } from "vitest";
 import type { DjangoNode } from "../src/ast.js";
-import { scanHtmlHostContexts, type HtmlHostContext } from "../src/html-host-context.js";
+import {
+  scanHtmlHostContexts,
+  splitHtmlAttributes,
+  type HtmlHostContext,
+} from "../src/html-host-context.js";
 import * as DjangoPlugin from "../src/index.js";
 import { parse } from "../src/parser.js";
 
@@ -194,6 +198,36 @@ describe("HTML host context scanner", () => {
     expect(scanHtmlHostContexts(source).isPreformattedAt(offsetOf(source, "{{ value }}"))).toBe(
       true,
     );
+  });
+
+  test.each([
+    ["<div>", "document-flow", true, false],
+    ["<div ", "start-tag", true, false],
+    ['<div title="', "attribute-value", true, false],
+    ["<script>", "document-flow", false, false],
+    ["<style>", "document-flow", false, false],
+    ["<pre>", "document-flow", false, true],
+    ["<textarea>", "document-flow", false, true],
+  ] as const)("bulk-scanned text through EOF retains %s context", (prefix, host, safe, pre) => {
+    const source = prefix + "ordinary &amp; text 😀 \n\u2028 ".repeat(200);
+    const contexts = scanHtmlHostContexts(source);
+    for (let offset = prefix.length; offset < source.length; offset += 1) {
+      expect(contexts.at(offset)).toBe(host);
+      expect(contexts.isDocumentFlowNormalizationSafeAt(offset)).toBe(safe);
+      expect(contexts.isPreformattedAt(offset)).toBe(pre);
+    }
+  });
+
+  test.each([
+    [
+      " a=\"long value\" b='other value' disabled ",
+      ['a="long value"', "b='other value'", "disabled"],
+    ],
+    ['a="unterminated value ', ['a="unterminated value ']],
+    ['""\'\' x="a"suffix', ["\"\"''", 'x="a"suffix']],
+    ["a\u00a0b\u2028c\t\nd", ["a", "b", "c", "d"]],
+  ])("attribute slicing preserves quoted spelling: %s", (source, expected) => {
+    expect(splitHtmlAttributes(source)).toEqual(expected);
   });
 
   test("defaults out-of-range offsets to conservative document flow", () => {
