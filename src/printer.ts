@@ -846,22 +846,36 @@ const BLOCK_FLOW_ELEMENTS = new Set([
   "article",
   "aside",
   "blockquote",
+  "body",
+  "caption",
+  "colgroup",
+  "dd",
   "details",
   "dialog",
   "div",
   "dl",
+  "dt",
   "fieldset",
   "figure",
   "footer",
   "form",
+  "head",
   "header",
   "hgroup",
+  "html",
+  "li",
   "main",
   "menu",
   "nav",
   "ol",
   "section",
   "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
   "ul",
 ]);
 
@@ -1069,6 +1083,15 @@ function restoreInlineProtectedMarkerRuns(currentDoc: string, pairs: Set<string>
 
   parts.push(currentDoc.slice(cursor));
   return parts.join("");
+}
+
+function hasTemplateBranches(block: TemplateBlockNode): boolean {
+  return block.childIds.some((id) => {
+    const child = block.nodes[id];
+    return child.type === "template-block"
+      ? hasTemplateBranches(child)
+      : child.type === "template-tag" && child.role === "branch";
+  });
 }
 
 function isInsideInlineHtmlElement(value: string, offset: number): boolean {
@@ -1296,7 +1319,15 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
             const currentNode = node.nodes[id];
             const markerContext = markerContexts.get(id);
             const sourceMarkerIndex = markerContext?.index ?? -1;
-            if (ignoreDoc) {
+            // Branch separators belong to rendered text in inline HTML. Preserve the
+            // whole block, including nested branches, rather than adding layout whitespace.
+            const preserveInlineBranches =
+              currentNode.type === "template-block" &&
+              !currentNode.inTag &&
+              !currentNode.inAttribute &&
+              isInsideInlineHtmlElement(node.content, sourceMarkerIndex) &&
+              hasTemplateBranches(currentNode);
+            if (ignoreDoc || preserveInlineBranches) {
               currentNode.preserveOriginalText = true;
               return { doc: currentNode.originalText };
             }
