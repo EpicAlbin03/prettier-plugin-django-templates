@@ -2,6 +2,11 @@
 
 Format Django HTML templates with Prettier.
 
+## Prerequisites
+
+- Node.js 22+
+- Prettier 3
+
 ## Install
 
 ```bash
