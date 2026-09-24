@@ -6,6 +6,17 @@ export default defineConfig({
   test: {
     include: ["test/**/*.ts"],
     exclude: ["test/**/*.bench.ts"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.ts"],
+      reporter: ["text", "html", "json", "json-summary"],
+      thresholds: {
+        statements: 98,
+        branches: 95,
+        functions: 100,
+        lines: 98,
+      },
+    },
   },
   staged: {
     "*": "vp check --fix",

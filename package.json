@@ -45,7 +45,7 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "test": "vp test",
-    "test:coverage": "vp exec vitest run --config vitest.coverage.config.ts --coverage",
+    "test:coverage": "vp test run --coverage",
     "test:package": "node test/package-smoke.mjs",
     "benchmark:performance": "vp run build && vp test bench test/performance.bench.ts --reporter=verbose",
     "validate:release": "vp run check && vp run test && vp run build && pnpm pack --dry-run && vp run test:package",
