@@ -516,6 +516,7 @@ export function parse(text: string): RootNode {
 
   // Track line breaks once instead of rescanning overlapping source slices at
   // every block closure (quadratic for deeply nested single-line templates).
+  const leadingWhitespaceEnd = text.search(/\S/);
   let lastNewline = -1;
   let nextNewline = text.indexOf("\n");
   for (const [tokenIndex, token] of tokens.entries()) {
@@ -528,7 +529,8 @@ export function parse(text: string): RootNode {
       continue;
     }
 
-    const rawPreNewLines = countPreNewLines(text, token.start);
+    const rawPreNewLines =
+      token.start === leadingWhitespaceEnd ? 0 : countPreNewLines(text, token.start);
     const preNewLines =
       rawPreNewLines > 1 && followsIgnoredRegionOrHtmlComment(tokens, tokenIndex)
         ? rawPreNewLines - 1
