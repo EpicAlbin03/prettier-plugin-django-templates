@@ -45,11 +45,11 @@ test("standalone-only element matching is quote-aware", async () => {
   expect(await formatTemplate(formatted)).toBe(formatted);
 });
 
-test("consecutive standalone-only elements receive one stable line break", async () => {
+test("consecutive standalone-only inline elements stay adjacent", async () => {
   const source = "<span>{% foo %}</span><em>{% bar %}</em>";
   const formatted = await formatTemplate(source);
 
-  expect(formatted).toBe("<span>{% foo %}</span>\n<em>{% bar %}</em>\n");
+  expect(formatted).toBe("<span>{% foo %}</span><em>{% bar %}</em>\n");
   expect(await formatTemplate(formatted)).toBe(formatted);
 });
 
@@ -57,7 +57,7 @@ test.each([
   [
     "comment",
     "<!-- <fake> --><span>{% foo %}</span><div>y</div>",
-    "<!-- <fake> -->\n<span>{% foo %}</span>\n<div>y</div>\n",
+    "<!-- <fake> --><span>{% foo %}</span>\n<div>y</div>\n",
   ],
   [
     "script",
@@ -67,14 +67,14 @@ test.each([
   [
     "style",
     '<style>.item::before { content: "<fake>"; }</style><span>{% foo %}</span><div>y</div>',
-    '<style>\n  .item::before {\n    content: "<fake>";\n  }\n</style>\n<span>{% foo %}</span>\n<div>y</div>\n',
+    '<style>\n  .item::before {\n    content: "<fake>";\n  }</style\n><span>{% foo %}</span>\n<div>y</div>\n',
   ],
   [
     "template",
     "<template><fake></fake></template><span>{% foo %}</span><div>y</div>",
-    "<template><fake></fake></template>\n<span>{% foo %}</span>\n<div>y</div>\n",
+    "<template><fake></fake></template><span>{% foo %}</span>\n<div>y</div>\n",
   ],
-])("%s prefixes with tag-like text split idempotently", async (_name, source, expected) => {
+])("%s prefixes with tag-like text format idempotently", async (_name, source, expected) => {
   const formatted = await formatTemplate(source);
 
   expect(formatted).toBe(expected);

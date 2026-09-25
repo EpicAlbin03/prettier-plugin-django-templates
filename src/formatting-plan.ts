@@ -68,36 +68,6 @@ function findInlineOnlyStandaloneElements(
   return matches;
 }
 
-function splitTopLevelInlineOnlyStandaloneElements(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
-  segments: string[],
-): string[] {
-  return segments.flatMap((segment) => {
-    const parts: string[] = [];
-    let cursor = 0;
-    let previousPartWasSplitElement = false;
-    for (const match of findInlineOnlyStandaloneElements(node, segment)) {
-      if (match.index > cursor) {
-        const between = segment.slice(cursor, match.index);
-        if (!(previousPartWasSplitElement && /^\s*$/.test(between))) {
-          parts.push(between);
-          previousPartWasSplitElement = false;
-        }
-      }
-      parts.push(match.text);
-      previousPartWasSplitElement = true;
-      cursor = match.index + match.text.length;
-    }
-    if (cursor < segment.length) {
-      const trailing = segment.slice(cursor);
-      if (!(previousPartWasSplitElement && /^\s*$/.test(trailing))) {
-        parts.push(trailing);
-      }
-    }
-    return parts.length > 0 ? parts : [segment];
-  });
-}
-
 function splitAtTemplateTags(
   node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
 ): string[] {
@@ -986,11 +956,7 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
     }
     const leadingStandaloneSplit =
       node.type === "root" ? splitLeadingStandaloneBlockTag(node) : undefined;
-    const splitSegments = leadingStandaloneSplit ?? splitAtTemplateTags(node);
-    const segments =
-      node.type === "root"
-        ? splitTopLevelInlineOnlyStandaloneElements(node, splitSegments)
-        : splitSegments;
+    const segments = leadingStandaloneSplit ?? splitAtTemplateTags(node);
     const ending = entries.at(-1);
     // A sequence of block markers on separate lines needs no HTML parser. Keep
     // every other whitespace shape on the normal path, including blank lines.

@@ -64,7 +64,7 @@ test("does not compact an expression's following block when its element has mult
 
 test("treats less-than text as text before standalone-only elements", async () => {
   const source = "<3><span>{% custom_asset %}</span>";
-  const expected = "<3>\n<span>{% custom_asset %}</span>\n";
+  const expected = "<3><span>{% custom_asset %}</span>\n";
   expect(await formatTemplate(source)).toBe(expected);
   expect(await formatTemplate(expected)).toBe(expected);
 });
