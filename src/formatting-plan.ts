@@ -551,6 +551,7 @@ function prepareSegmentForHtml(
   segment: string,
   markerAllocator: InternalMarkerAllocator,
   markerContexts: ReadonlyMap<string, MarkerContext>,
+  preserved: ReadonlyMap<string, PreservedSpan>,
 ): PreparedSegment {
   const beforeReplacements: Array<{ token: string; value: string }> = [];
   // Protect only the sensitive body or standalone construct. The surrounding HTML
@@ -577,6 +578,15 @@ function prepareSegmentForHtml(
     protectedSegment =
       segment.slice(0, protectedRange.start) + token + segment.slice(protectedRange.end);
   }
+
+  // Preserved textual blocks are text to HTML, not layout-driving comments.
+  protectedSegment = protectedSegment.replace(new RegExp(BLOCK_MARKER_SOURCE, "g"), (id) => {
+    const span = preserved.get(id);
+    if (span?.reason !== "inline" || span.text.includes("\n")) return id;
+    const token = markerAllocator.allocate("inline");
+    beforeReplacements.push({ token, value: id });
+    return token;
+  });
 
   // Planned inline line breaks own these gaps. Hiding them from HTML prevents
   // its fill Docs from adding a second line break at narrow print widths.
@@ -859,8 +869,13 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       } else if (
         node.type === "template-block" &&
         node.hostContext === "document-flow" &&
-        isInlineHtmlElement(sourceContexts.elementAt(node.sourceStart)) &&
-        !hasStandaloneBlockDelimiters(node, root.sourceText)
+        (isInlineHtmlElement(sourceContexts.elementAt(node.sourceStart)) ||
+          (!hasHtmlMarkup(node.html) &&
+            (/[^\s>}]/.test(root.sourceText[node.sourceStart - 1] ?? "") ||
+              /[^\s<{]/.test(root.sourceText[node.sourceEnd] ?? "") ||
+              (node.start.keyword === "for" && !node.containsNewLines))) ||
+          (node.html.length > 0 && /^\s*$/.test(node.html))) &&
+        (!hasStandaloneBlockDelimiters(node, root.sourceText) || /^\s+$/.test(node.html))
       )
         preserve(node, getInlineBlockText(node), "inline");
     }
@@ -1020,7 +1035,7 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       segments,
       boundaries: planSegmentBoundaries(node, segments),
       preparedSegments: segments.map((segment) =>
-        prepareSegmentForHtml(node, segment, allocator, markerContexts),
+        prepareSegmentForHtml(node, segment, allocator, markerContexts, preserved),
       ),
       leadingStandaloneSplit,
       blockSequence,
