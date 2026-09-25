@@ -413,6 +413,16 @@ function protectConditionalHtmlWhitespace(
   return { html, nodes };
 }
 
+function isOnOwnLine(node: DjangoNode, source: string): boolean {
+  const lineStart = source.lastIndexOf("\n", node.sourceStart - 1) + 1;
+  const nextLine = source.indexOf("\n", node.sourceEnd);
+  const lineEnd = nextLine === -1 ? source.length : nextLine;
+  return (
+    /^[ \t\r]*$/.test(source.slice(lineStart, node.sourceStart)) &&
+    /^[ \t\r]*$/.test(source.slice(node.sourceEnd, lineEnd))
+  );
+}
+
 function hasStandaloneBlockDelimiters(block: TemplateBlockNode, source: string): boolean {
   const delimiters = [
     block.start,
@@ -424,15 +434,7 @@ function hasStandaloneBlockDelimiters(block: TemplateBlockNode, source: string):
   ];
   // Structural printing introduces breaks around every delimiter. Only allow it
   // when those breaks already exist, so inline branch text stays adjacent.
-  return delimiters.every((tag) => {
-    const lineStart = source.lastIndexOf("\n", tag.sourceStart - 1) + 1;
-    const nextLine = source.indexOf("\n", tag.sourceEnd);
-    const lineEnd = nextLine === -1 ? source.length : nextLine;
-    return (
-      /^[ \t\r]*$/.test(source.slice(lineStart, tag.sourceStart)) &&
-      /^[ \t\r]*$/.test(source.slice(tag.sourceEnd, lineEnd))
-    );
-  });
+  return delimiters.every((tag) => isOnOwnLine(tag, source));
 }
 
 function hasSafeSingleBlockElementBody(block: TemplateBlockNode): boolean {
@@ -526,6 +528,7 @@ function prepareSegmentForHtml(
   markerAllocator: InternalMarkerAllocator,
   markerContexts: ReadonlyMap<string, MarkerContext>,
   preserved: ReadonlyMap<string, PreservedSpan>,
+  standaloneExpressions: ReadonlySet<string>,
 ): PreparedSegment {
   const beforeReplacements: Array<{ token: string; value: string }> = [];
   // Protect only the sensitive body or standalone construct. The surrounding HTML
@@ -558,6 +561,17 @@ function prepareSegmentForHtml(
     const span = preserved.get(id);
     if (span?.reason !== "inline" || span.text.includes("\n")) return id;
     const token = markerAllocator.allocate("inline");
+    beforeReplacements.push({ token, value: id });
+    return token;
+  });
+
+  // An expression on its own line can render whole HTML elements (for example
+  // a form field). Give HTML a block marker so it preserves that layout instead
+  // of reflowing the expression as ordinary text. Restore the original marker
+  // before inserting its Doc; the AST and expression spelling stay unchanged.
+  protectedSegment = protectedSegment.replace(new RegExp(INLINE_MARKER_SOURCE, "g"), (id) => {
+    if (!standaloneExpressions.has(id) || preserved.has(id)) return id;
+    const token = markerAllocator.allocate("block");
     beforeReplacements.push({ token, value: id });
     return token;
   });
@@ -889,8 +903,21 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
     const hostContexts = scanHtmlHostContexts(node.html);
     const entries = markerEntries(node.html, nodes);
     const markerContexts = new Map<string, MarkerContext>();
+    const standaloneExpressions = new Set<string>();
     for (const [index, entry] of entries.entries()) {
       const child = nodes[entry.id];
+      // Expression-only containers already preserve their line groups directly.
+      // In mixed HTML, keep standalone expressions structural only in safe flow.
+      const standaloneExpression =
+        hostContexts.tags.length > 0 &&
+        child.type === "expression" &&
+        child.hostContext === "document-flow" &&
+        !preserved.has(child.id) &&
+        sourceContexts.isDocumentFlowNormalizationSafeAt(child.sourceStart) &&
+        !sourceContexts.isPreformattedAt(child.sourceStart) &&
+        !isInlineHtmlElement(sourceContexts.elementAt(child.sourceStart)) &&
+        isOnOwnLine(child, root.sourceText);
+      if (standaloneExpression) standaloneExpressions.add(child.id);
       // Synthetic ranges are plan-owned, never inserted into the parser's dictionary.
       if (!root.nodes[entry.id]) preserve(child, child.sourceText, "conditional-html");
       const previous = entries[index - 1];
@@ -937,14 +964,15 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
         sourceContexts.isDocumentFlowNormalizationSafeAt(child.sourceStart - 1) &&
         !isInlineHtmlElement(sourceContexts.elementAt(child.sourceStart));
       markerContexts.set(entry.id, {
-        leadingLines: commentLineBreak
-          ? Math.min(gapBefore.split("\n").length - 1, 2)
-          : hostContexts.tags.length === 0 &&
-              isStandaloneFlowTag(previousNode) &&
-              (isStandaloneFlowTag(child) ||
-                (child.type === "template-block" && child.protectedMarkerKind === "block"))
-            ? Math.min(child.preNewLines, 2)
-            : 0,
+        leadingLines:
+          commentLineBreak && !standaloneExpression
+            ? Math.min(gapBefore.split("\n").length - 1, 2)
+            : hostContexts.tags.length === 0 &&
+                isStandaloneFlowTag(previousNode) &&
+                (isStandaloneFlowTag(child) ||
+                  (child.type === "template-block" && child.protectedMarkerKind === "block"))
+              ? Math.min(child.preNewLines, 2)
+              : 0,
         inlineWithNext:
           /^[ \t]+$/.test(betweenNext ?? "") &&
           isStandaloneFlowTag(child) &&
@@ -1005,7 +1033,14 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       segments,
       boundaries: planSegmentBoundaries(node, segments),
       preparedSegments: segments.map((segment) =>
-        prepareSegmentForHtml(node, segment, allocator, markerContexts, preserved),
+        prepareSegmentForHtml(
+          node,
+          segment,
+          allocator,
+          markerContexts,
+          preserved,
+          standaloneExpressions,
+        ),
       ),
       leadingStandaloneSplit,
       blockSequence,
