@@ -236,7 +236,7 @@ void resolvedBrowserPlugin;
   runPnpm(
     [
       "exec",
-      "vite",
+      "vp",
       "build",
       temporaryDirectory,
       "--config",
