@@ -59,9 +59,7 @@
         {% endifchanged %}
         <article>{{ article.title }}</article>
       {% endfor %}
-      {% filter force_escape|lower %}
-        {{ user_input }}
-      {% endfilter %}
+      {% filter force_escape|lower %} {{ user_input }} {% endfilter %}
       {% include "partials/card.html" with item=featured_item only %}
       {% lorem 2 p random %}
       <time datetime="{% now 'c' %}">{% now "Y-m-d H:i" %}</time>
