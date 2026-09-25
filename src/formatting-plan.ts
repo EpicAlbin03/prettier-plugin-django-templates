@@ -478,7 +478,11 @@ function adaptHtmlProjection(node: Container, html: string): string {
         (previous &&
           node.nodes[previous.id].protectedMarkerKind === "block" &&
           previous.index + previous.id.length === entry.index) ||
-        (previousTag?.closing && previousTag.end === entry.index) ||
+        (previousTag?.closing &&
+          (BLOCK_FLOW_ELEMENTS.has(previousTag.name) ||
+            child.type !== "raw-block" ||
+            child.keyword !== "comment") &&
+          previousTag.end === entry.index) ||
         commentEnds.has(entry.index)
       )
         insertions.set(entry.index, "\n");
