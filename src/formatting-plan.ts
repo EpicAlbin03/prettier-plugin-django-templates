@@ -443,6 +443,28 @@ function protectConditionalHtmlWhitespace(
   return { html, nodes };
 }
 
+function hasStandaloneBlockDelimiters(block: TemplateBlockNode, source: string): boolean {
+  const delimiters = [
+    block.start,
+    ...block.childIds.flatMap((id) => {
+      const child = block.nodes[id];
+      return child.type === "template-tag" && child.role === "branch" ? [child] : [];
+    }),
+    block.end,
+  ];
+  // Structural printing introduces breaks around every delimiter. Only allow it
+  // when those breaks already exist, so inline branch text stays adjacent.
+  return delimiters.every((tag) => {
+    const lineStart = source.lastIndexOf("\n", tag.sourceStart - 1) + 1;
+    const nextLine = source.indexOf("\n", tag.sourceEnd);
+    const lineEnd = nextLine === -1 ? source.length : nextLine;
+    return (
+      /^[ \t\r]*$/.test(source.slice(lineStart, tag.sourceStart)) &&
+      /^[ \t\r]*$/.test(source.slice(tag.sourceEnd, lineEnd))
+    );
+  });
+}
+
 function hasSafeSingleBlockElementBody(block: TemplateBlockNode): boolean {
   const html = block.html.trim();
   const { tags } = scanHtmlHostContexts(html);
@@ -794,7 +816,8 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       else if (
         node.type === "template-block" &&
         node.hostContext === "document-flow" &&
-        isInlineHtmlElement(sourceContexts.elementAt(node.sourceStart))
+        isInlineHtmlElement(sourceContexts.elementAt(node.sourceStart)) &&
+        !hasStandaloneBlockDelimiters(node, root.sourceText)
       )
         preserve(node, getInlineBlockText(node), "inline");
     }
