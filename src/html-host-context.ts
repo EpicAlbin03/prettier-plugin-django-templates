@@ -3,6 +3,7 @@ import { findProtectedTemplateRegionEnd } from "./template-regions.js";
 export type HtmlHostContext = "document-flow" | "start-tag" | "attribute-value";
 
 export interface HtmlAttribute {
+  readonly valueStart?: number;
   readonly name: string;
   readonly start: number;
   readonly end: number;
@@ -265,6 +266,11 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
         const attributeOffset = tagStart + tag[0].length;
         const attributeText = tagText.slice(tag[0].length).replace(/\/?\s*>$/, "");
         const attributeRanges = closing ? [] : scanHtmlAttributes(attributeText, attributeOffset);
+        for (const attribute of attributeRanges) {
+          if (attribute.valueStart !== undefined) {
+            fillContext(contexts, attribute.valueStart, attribute.end, ATTRIBUTE_VALUE);
+          }
+        }
         tags.push({
           start: tagStart,
           end: offset + 1,
@@ -375,10 +381,12 @@ function scanHtmlAttributes(content: string, sourceOffset: number): HtmlAttribut
     }
     const name = content.slice(start, cursor);
     let end = cursor;
+    let valueStart: number | undefined;
     while (/\s/.test(content[cursor] ?? "")) cursor += 1;
     if (content[cursor] === "=") {
       cursor += 1;
       while (/\s/.test(content[cursor] ?? "")) cursor += 1;
+      valueStart = sourceOffset + cursor;
       const quote =
         content[cursor] === '"' || content[cursor] === "'" ? content[cursor++] : undefined;
       while (cursor < content.length) {
@@ -391,7 +399,7 @@ function scanHtmlAttributes(content: string, sourceOffset: number): HtmlAttribut
       while (cursor < content.length && !/\s/.test(content[cursor])) cursor += 1;
       end = cursor;
     }
-    attributes.push({ name, start: sourceOffset + start, end: sourceOffset + end });
+    attributes.push({ name, start: sourceOffset + start, end: sourceOffset + end, valueStart });
   }
   return attributes;
 }
