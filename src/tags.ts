@@ -228,7 +228,20 @@ export function isKnownEndTag(name: string): boolean {
   return knownEndNames.has(name);
 }
 
-export function getTagRole(name: string): TagRole {
+export function getTagRole(name: string, args?: string): TagRole {
+  if (args !== undefined) {
+    if (
+      ["component", "component_block", "fill", "slot", "provide"].includes(name) &&
+      /(?:^|\s)\/$/.test(args)
+    ) {
+      return "standalone";
+    }
+    // CMS only parses a fallback body when an unquoted 'or' option is present.
+    const argumentsWithoutStrings = args.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, "");
+    if (name === "placeholder" && !/(?:^|\s)or(?:\s|$)/.test(argumentsWithoutStrings)) {
+      return "standalone";
+    }
+  }
   if (isKnownEndTag(name)) {
     return "end";
   }

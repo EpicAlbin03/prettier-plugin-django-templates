@@ -194,7 +194,7 @@
       {% endrecursetree %}
       {% drilldown_tree_for_node node as drilldown %}
       {% full_tree_for_model app.Model as tree %}
-      {% placeholder "content" %}
+      {% placeholder "content" or %}
         <section>{{ content }}</section>
       {% endplaceholder %}
       {% static_placeholder "footer" %}

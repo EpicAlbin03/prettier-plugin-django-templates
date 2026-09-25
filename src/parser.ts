@@ -173,14 +173,15 @@ function createTagToken(
 ): TagToken {
   const content = normalizeTemplateTagContent(raw.slice(2, -2));
   const name = content.split(/\s+/, 1)[0];
+  const args = content.slice(name.length).trimStart();
 
   return {
     type: "Tag",
     raw,
     content,
     name,
-    args: content.slice(name.length).trimStart(),
-    role: getTagRole(name),
+    args,
+    role: getTagRole(name, args),
     start,
     end,
     ...state,
@@ -413,6 +414,7 @@ function getStandaloneTagsWithLaterEnds(tokens: Token[]): Set<number> {
 
     if (
       token.role === "standalone" &&
+      getTagRole(token.name) !== "start" &&
       getExpectedEndNames(token.name).some((endName) => laterTagNames.has(endName))
     ) {
       matches.add(index);

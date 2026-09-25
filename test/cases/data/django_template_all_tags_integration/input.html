@@ -116,7 +116,7 @@
       </ul>
       {% endif %}
     </li>
-    {% endrecursetree %} {% drilldown_tree_for_node node as drilldown %} {% full_tree_for_model app.Model as tree %} {% placeholder "content" %}
+    {% endrecursetree %} {% drilldown_tree_for_node node as drilldown %} {% full_tree_for_model app.Model as tree %} {% placeholder "content" or %}
     <section>{{ content }}</section>
     {% endplaceholder %} {% static_placeholder "footer" %}
     <footer>Footer</footer>
