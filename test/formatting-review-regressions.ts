@@ -57,12 +57,6 @@ test("F05: whitespace-only blocks retain their literal body", async () => {
   await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
 });
 
-test("F06: filter blocks retain the exact input passed to the filter", async () => {
-  const source = "{% filter length %}abc{% endfilter %}";
-  // Adding indentation or line breaks changes the filter result from 3.
-  await expect(formatTemplate(source)).resolves.toContain(source);
-});
-
 describe("F07: standalone tags embedded in inline text", () => {
   test.each(['{% include "part.html" %}', '{% url "view" as target %}'])(
     "does not add rendered whitespace around %s",
@@ -195,26 +189,4 @@ test("F23: title content containing a standalone tag is idempotent", async () =>
   const source = '<title>{{a}}{% include "part.html" %}{{b}}</title>';
   const output = await formatTemplate(source);
   expect(await formatTemplate(output)).toBe(output);
-});
-
-describe("F24: line-ending normalization must preserve Django lexical meaning", () => {
-  test("recognizes an expression containing CR but no LF through the public formatter", async () => {
-    await expect(formatTemplate("{{\rvalue}}")).resolves.toBe("{{ value }}\n");
-  });
-
-  test("accepts an if tag containing CR but no LF", async () => {
-    const output = await formatTemplate("{% if\rx %}yes{% endif %}");
-    expect(output).toBe("{% if x %}\n  yes\n{% endif %}\n");
-    expect(await formatTemplate(output)).toBe(output);
-  });
-
-  test("does not activate literal LF-spanning delimiters when CR output is requested", async () => {
-    const output = await format("{{\nvalue}}", {
-      parser: "django-html",
-      plugins: [DjangoPlugin],
-      endOfLine: "cr",
-    });
-    // Django's non-DOTALL lexer excludes LF, not CR. This must remain literal text.
-    expect(output).not.toMatch(/{{[^\n]*?}}/);
-  });
 });

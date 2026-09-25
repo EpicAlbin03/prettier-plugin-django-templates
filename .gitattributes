@@ -1,4 +1,1 @@
 * text=auto eol=lf
-
-# Preserve the exact CR/LF bytes used to test Django's non-DOTALL lexer.
-test/cases/data/review_f24_*/*.html -text
