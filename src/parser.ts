@@ -697,9 +697,11 @@ export function parse(text: string): RootNode {
         sourceEnd: token.end,
         nodes,
         protectedMarkerKind:
-          frame.start.hostContext !== "document-flow" || frame.start.preserveOriginalText
-            ? "inline"
-            : "block",
+          frame.start.hostContext === "start-tag"
+            ? "attr"
+            : frame.start.hostContext === "attribute-value" || frame.start.preserveOriginalText
+              ? "inline"
+              : "block",
         preserveOriginalText: frame.start.preserveOriginalText,
         start: frame.start,
         end: endNode,
