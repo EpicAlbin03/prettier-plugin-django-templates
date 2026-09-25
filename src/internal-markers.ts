@@ -41,7 +41,8 @@ export class InternalMarkerAllocator {
   }
 
   #reserveIdsFrom(value: string): void {
-    const markerPattern = /DJ(\d+)X|<!--DJ(\d+)-->|dj(\d+)=""|DJ_INLINE_RUN_(\d+)(?:_X)?/g;
+    // Reserve attribute names too: HTML normalizes quotes and spacing around '='.
+    const markerPattern = /DJ(\d+)X|<!--DJ(\d+)-->|\bdj(\d+)\b|DJ_INLINE_RUN_(\d+)(?:_X)?/g;
     for (const match of value.matchAll(markerPattern)) {
       const id = match.slice(1).find((part) => part !== undefined);
       if (id !== undefined) {
