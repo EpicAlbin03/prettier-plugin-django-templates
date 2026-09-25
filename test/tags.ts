@@ -186,7 +186,8 @@ describe("template tag descriptor registry", () => {
     ]);
     expect(hasExactRawBodyEnd("comment")).toBe(false);
     expect(hasExactRawBodyEnd("verbatim")).toBe(true);
-    expect(matchesRawBodyEnd("comment", "comment", "endcomment optional")).toBe(true);
+    expect(matchesRawBodyEnd("comment", "comment", "endcomment optional")).toBe(false);
+    expect(matchesRawBodyEnd("comment", "comment", "endcomment")).toBe(true);
     expect(matchesRawBodyEnd("verbatim", "verbatim named", "endverbatim named")).toBe(true);
     expect(matchesRawBodyEnd("verbatim", "verbatim named", "endverbatim other")).toBe(false);
 

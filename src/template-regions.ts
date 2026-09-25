@@ -31,12 +31,25 @@ export function findRawBodyEnd(
   // Match Django's lexer: a delimiter cannot span LF, including a raw body's terminator.
   const constructs = /{%[^\n]*?%}|{{[^\n]*?}}|{#[^\n]*?#}/g;
   constructs.lastIndex = from;
+  let verbatimEnd: string | undefined;
   for (let match = constructs.exec(source); match; match = constructs.exec(source)) {
     if (!match[0].startsWith("{%")) {
       continue;
     }
     const tagContent = match[0].slice(2, -2).trim();
     const [, ...rest] = tagContent.split(/\s+/);
+    // Verbatim state belongs to Django's lexer, even when the parser is skipping
+    // a comment body. Tokens within it cannot terminate that comment.
+    if (name === "comment") {
+      if (verbatimEnd) {
+        if (tagContent === verbatimEnd) verbatimEnd = undefined;
+        continue;
+      }
+      if (tagContent === "verbatim" || tagContent.startsWith("verbatim ")) {
+        verbatimEnd = `end${tagContent}`;
+        continue;
+      }
+    }
     if (matchesRawBodyEnd(name, openingContent, tagContent)) {
       return {
         end: match.index + match[0].length,

@@ -279,7 +279,7 @@ export function matchesRawBodyEnd(
     return closingContent === `end${openingContent}`;
   }
 
-  return closingContent.split(/\s+/, 1)[0] === `end${name}`;
+  return closingContent === `end${name}`;
 }
 
 export function getStandaloneFlow(name: string, args: string): StandaloneFlow {
