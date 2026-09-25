@@ -85,17 +85,16 @@ export function getRawBlockText(node: RawBlockNode): string {
   return `{% ${node.keyword}${args ? ` ${args}` : ""} %}${node.body}{% end${node.keyword}${endArgs ? ` ${endArgs}` : ""} %}`;
 }
 
-export function getTextSensitiveBlockText(node: DjangoNode): string | undefined {
+export function getTranslationBlockText(node: DjangoNode): string | undefined {
   if (
     node.type !== "template-block" ||
-    !["blocktranslate", "blocktrans", "filter"].includes(node.start.keyword)
+    (node.start.keyword !== "blocktranslate" && node.start.keyword !== "blocktrans")
   ) {
     return undefined;
   }
 
   // Django uses body whitespace (and literal HTML) in gettext keys. Preserve even
   // trimmed bodies: HTML formatting can change more than Django's trimming removes.
-  // Filter blocks likewise consume the exact rendered body, including its whitespace.
   const body = node.sourceText.slice(
     node.start.sourceEnd - node.sourceStart,
     node.end.sourceStart - node.sourceStart,
@@ -109,9 +108,9 @@ export function getInlineBlockText(block: TemplateBlockNode): string {
   if (block.preserveOriginalText) {
     return block.sourceText;
   }
-  const sensitive = getTextSensitiveBlockText(block);
-  if (sensitive !== undefined) {
-    return sensitive;
+  const translation = getTranslationBlockText(block);
+  if (translation !== undefined) {
+    return translation;
   }
 
   const parts: string[] = [];

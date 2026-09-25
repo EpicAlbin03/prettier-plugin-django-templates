@@ -14,7 +14,7 @@ import {
 import {
   getExpressionOnlyLines,
   getInlineBlockText,
-  getTextSensitiveBlockText,
+  getTranslationBlockText,
 } from "./template-text.js";
 import {
   ANY_MARKER_SOURCE,
@@ -667,7 +667,7 @@ export interface PreservedSpan {
   readonly text: string;
   readonly reason:
     | "source"
-    | "text-sensitive"
+    | "translation"
     | "inline"
     | "attribute-value"
     | "conditional-html"
@@ -834,8 +834,8 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
     } else if (node.preserveOriginalText || node.sourceEnd <= preservedEnd) {
       preserve(node, node.sourceText, "source");
     } else {
-      const sensitive = getTextSensitiveBlockText(node);
-      if (sensitive !== undefined) preserve(node, sensitive, "text-sensitive");
+      const translation = getTranslationBlockText(node);
+      if (translation !== undefined) preserve(node, translation, "translation");
       else if (node.type === "template-block" && node.hostContext === "attribute-value") {
         // Attribute text belongs to its host value, not to a detached HTML fragment.
         // Normalize Django tokens without collapsing or rewrapping literal whitespace.
