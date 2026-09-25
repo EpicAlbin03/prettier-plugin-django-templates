@@ -729,7 +729,7 @@ function ignoredSourceRanges(source: string, html: HtmlHostContextIndex, ordered
   }
   let nodeIndex = 0;
   let tagIndex = 0;
-  for (const comment of html.comments) {
+  for (const [commentIndex, comment] of html.comments.entries()) {
     if ((ranges.at(-1)?.end ?? -1) > comment.start) continue;
     const commentText = source.slice(comment.start, comment.end);
     // Match Prettier's directive grammar and case-sensitive raw attribute names.
@@ -737,7 +737,7 @@ function ignoredSourceRanges(source: string, html: HtmlHostContextIndex, ordered
       .slice(4, -3)
       .trim()
       .match(/^prettier-ignore-attribute(?:\s+(.+))?$/s);
-    if (commentText !== "<!-- prettier-ignore -->" && !attributeIgnore) continue;
+    if (commentText.slice(4, -3).trim() !== "prettier-ignore" && !attributeIgnore) continue;
     while (ordered[nodeIndex] && ordered[nodeIndex].sourceStart < comment.end) nodeIndex += 1;
     while (html.tags[tagIndex] && html.tags[tagIndex].start < comment.end) tagIndex += 1;
     const nextNode = ordered[nodeIndex];
@@ -750,9 +750,31 @@ function ignoredSourceRanges(source: string, html: HtmlHostContextIndex, ordered
       for (const attribute of nextTag.attributeRanges) {
         if (!names || names.includes(attribute.name)) ranges.push(attribute);
       }
-    } else if (nextTag && nextTag.start < (nextNode?.sourceStart ?? source.length)) {
-      ranges.push({ start: nextTag.start, end: elementEnds.get(tagIndex) ?? nextTag.end });
-    } else if (nextNode) ranges.push({ start: nextNode.sourceStart, end: nextNode.sourceEnd });
+    } else {
+      const start = comment.end + (source.slice(comment.end).match(/^\s*/)?.[0].length ?? 0);
+      const nextComment = html.comments[commentIndex + 1];
+      if (nextTag?.start === start) {
+        ranges.push({ start, end: elementEnds.get(tagIndex) ?? nextTag.end });
+      } else if (nextComment?.start === start) {
+        ranges.push({ start, end: nextComment.end });
+      } else if (nextNode?.sourceStart === start && nextNode.protectedMarkerKind === "block") {
+        ranges.push({ start, end: nextNode.sourceEnd });
+      } else {
+        // HTML ignores the whole following text node, not its first Django token.
+        // Ordinary text or a comment must not redirect the ignore to a later element.
+        const nextBlock = ordered
+          .slice(nodeIndex)
+          .find((node) => node.sourceStart >= start && node.protectedMarkerKind === "block");
+        ranges.push({
+          start,
+          end: Math.min(
+            nextTag?.start ?? source.length,
+            nextComment?.start ?? source.length,
+            nextBlock?.sourceStart ?? source.length,
+          ),
+        });
+      }
+    }
   }
   return ranges;
 }
