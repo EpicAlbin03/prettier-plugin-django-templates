@@ -4,10 +4,10 @@
     {% localtime on %}
       {% timezone "Europe/Paris" %}
         {% blocktranslate count counter=list|length %}
-          There is {{ counter }} object.
-        {% plural %}
-          There are {{ counter }} objects.
-        {% endblocktranslate %}
+There is {{counter}} object.
+{%plural%}
+There are {{counter}} objects.
+{% endblocktranslate %}
       {% endtimezone %}
     {% endlocaltime %}
   {% endlocalize %}

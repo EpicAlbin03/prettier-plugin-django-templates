@@ -1,0 +1,25 @@
+{% load crispy_forms_tags %}
+
+<form {{ contact_form_attrs }}>
+  {% if request_method == "post" %}
+    {% csrf_token %}
+  {% endif %}
+
+  {% if show_validation_errors %}
+    <div id="{{ error_summary_id }}">
+      {% if form.non_field_errors %}
+        <div class="notice notice-error validation-summary">
+          <ul class="error-list">
+            {{ form.non_field_errors|unordered_list }}
+          </ul>
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% crispy form "bootstrap5" %}
+
+  {% if submit_controls %}
+    {{ submit_controls }}
+  {% endif %}
+</form>

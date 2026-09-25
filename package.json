@@ -32,7 +32,10 @@
       "require": "./dist/plugin.cjs",
       "default": "./dist/plugin.cjs"
     },
-    "./browser": "./dist/browser.mjs",
+    "./browser": {
+      "types": "./dist/browser.d.mts",
+      "default": "./dist/browser.mjs"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -42,9 +45,10 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "test": "vp test",
+    "test:coverage": "vp test run --coverage",
     "test:package": "node test/package-smoke.mjs",
-    "benchmark:performance": "vp run build && node --expose-gc scripts/benchmark-performance.mjs",
-    "validate:release": "vp run check && vp run test && vp run build && pnpm pack --dry-run && vp run test:package",
+    "benchmark:performance": "vp run build && vp test bench test/performance.bench.ts --reporter=verbose",
+    "validate:release": "vp run build && vp run check && vp run test && pnpm pack --dry-run && vp run test:package",
     "check": "vp check",
     "check:fix": "vp check --fix",
     "lint": "vp lint",
@@ -55,12 +59,16 @@
     "changeset:publish": "changeset publish"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.5.1",
-    "@changesets/cli": "^2.31.0",
-    "@types/node": "^25.6.2",
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@changesets/changelog-github": "^1.0.1",
+    "@changesets/cli": "^3.0.3",
+    "@oxlint/plugins": "1.83.0",
+    "@types/node": "^22.20.3",
     "@typescript/native": "npm:typescript@^7.0.2",
-    "bumpp": "^11.1.0",
-    "prettier": "^3.8.0",
+    "@vitest/coverage-v8": "5.0.1",
+    "oxlint": "1.83.0",
+    "prettier": "^3.9.8",
+    "publint": "^0.3.24",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vite-plus": "catalog:",
     "vitest": "catalog:"

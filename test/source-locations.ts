@@ -9,11 +9,6 @@ const prettierOptions: Options = {
   plugins: [DjangoPlugin],
 };
 
-async function parseTemplate(source: string): Promise<RootNode> {
-  const parseSource = parse as unknown as (text: string) => RootNode | Promise<RootNode>;
-  return await parseSource(source);
-}
-
 function nodesOfType<T extends DjangoNode["type"]>(
   root: RootNode,
   type: T,
@@ -34,7 +29,7 @@ describe("source locations", () => {
   test("direct AST spans remain tied to constructs after differently sized replacements", async () => {
     const source =
       "prefix {{ first_value|default:'a much longer fallback' }} / {# note #} / {% include 'card.html' %} / {{ z }} suffix";
-    const root = await parseTemplate(source);
+    const root = parse(source);
     const expressions = nodesOfType(root, "expression");
     const comment = nodesOfType(root, "comment")[0];
     const include = nodesOfType(root, "template-tag").find((node) => node.keyword === "include")!;
@@ -54,7 +49,7 @@ describe("source locations", () => {
   test("nested blocks span their complete original opening through closing tags", async () => {
     const source =
       "before {% if user %}<div>{% for item in items %}{{ item }}{% endfor %}</div>{% endif %} after";
-    const root = await parseTemplate(source);
+    const root = parse(source);
     const blocks = nodesOfType(root, "template-block");
     const ifBlock = blocks.find((node) => node.start.keyword === "if")!;
     const forBlock = blocks.find((node) => node.start.keyword === "for")!;
@@ -69,7 +64,7 @@ describe("source locations", () => {
 
   test("uses JavaScript UTF-16 offsets before and inside constructs", async () => {
     const source = "😀 café {{ emoji_😀|default:'雪' }} tail {% include '雪.html' %}";
-    const root = await parseTemplate(source);
+    const root = parse(source);
     const expression = nodesOfType(root, "expression")[0];
     const include = nodesOfType(root, "template-tag").find((node) => node.keyword === "include")!;
 
@@ -83,7 +78,7 @@ describe("source locations", () => {
   test("nested unmatched starts retain protected content and original source spans", async () => {
     const source =
       "{% if outer %}\n<div>{{ value }}</div>\n{% for item in items %}\n<span>{{ item }}</span>";
-    const root = await parseTemplate(source);
+    const root = parse(source);
     const starts = nodesOfType(root, "template-tag").filter(
       (node) => node.keyword === "if" || node.keyword === "for",
     );
@@ -96,7 +91,7 @@ describe("source locations", () => {
       "{{ value }}",
       "{{ item }}",
     ]);
-    expect(root.content).toBe(
+    expect(root.html).toBe(
       `${ifStart.id}\n<div>${expressions[0].id}</div>\n${forStart.id}\n<span>${expressions[1].id}</span>`,
     );
     expect(await format(source, prettierOptions)).toBe(
@@ -106,7 +101,7 @@ describe("source locations", () => {
 
   test("preserved malformed regions and unmatched raw starts retain sensible spans", async () => {
     const unclosedIgnore = "x <!-- prettier-ignore-start --> <div   class=x>";
-    const ignoreRoot = await parseTemplate(unclosedIgnore);
+    const ignoreRoot = parse(unclosedIgnore);
     const ignore = nodesOfType(ignoreRoot, "ignore-region")[0];
     expect(ignore.sourceEnd).toBe(unclosedIgnore.length);
     expect(sourceSlice(unclosedIgnore, ignore)).toBe(
@@ -114,7 +109,7 @@ describe("source locations", () => {
     );
 
     const unclosedRaw = "lead {% verbatim named %} {{ untouched }}";
-    const rawRoot = await parseTemplate(unclosedRaw);
+    const rawRoot = parse(unclosedRaw);
     const rawBlock = nodesOfType(rawRoot, "raw-block")[0];
     expect(sourceSlice(unclosedRaw, rawBlock)).toBe("{% verbatim named %} {{ untouched }}");
     expect(nodesOfType(rawRoot, "expression")).toHaveLength(0);

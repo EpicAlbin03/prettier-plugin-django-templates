@@ -104,7 +104,7 @@ register(["verbatim"], {
 register(["elif"], { role: "branch", parents: ["if"] });
 register(["else"], {
   role: "branch",
-  parents: ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag"],
+  parents: ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag", "switch", "sample"],
 });
 register(["empty"], { role: "branch", parents: ["for"] });
 register(["plural"], { role: "branch", parents: ["blocktranslate", "blocktrans"] });
@@ -193,8 +193,10 @@ register(
   { role: "standalone", flow: "document-flow" },
 );
 
+const branchNames: string[] = [];
 const knownEndNames = new Map<string, string>();
 for (const [name, descriptor] of descriptors) {
+  if (descriptor.role === "branch") branchNames.push(name);
   if (descriptor.role === "start") {
     knownEndNames.set(`end${name}`, name);
   }
@@ -226,7 +228,20 @@ export function isKnownEndTag(name: string): boolean {
   return knownEndNames.has(name);
 }
 
-export function getTagRole(name: string): TagRole {
+export function getTagRole(name: string, args?: string): TagRole {
+  if (args !== undefined) {
+    if (
+      ["component", "component_block", "fill", "slot", "provide"].includes(name) &&
+      /(?:^|\s)\/$/.test(args)
+    ) {
+      return "standalone";
+    }
+    // CMS only parses a fallback body when an unquoted 'or' option is present.
+    const argumentsWithoutStrings = args.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, "");
+    if (name === "placeholder" && !/(?:^|\s)or(?:\s|$)/.test(argumentsWithoutStrings)) {
+      return "standalone";
+    }
+  }
   if (isKnownEndTag(name)) {
     return "end";
   }
@@ -277,7 +292,7 @@ export function matchesRawBodyEnd(
     return closingContent === `end${openingContent}`;
   }
 
-  return closingContent.split(/\s+/, 1)[0] === `end${name}`;
+  return closingContent === `end${name}`;
 }
 
 export function getStandaloneFlow(name: string, args: string): StandaloneFlow {
@@ -306,8 +321,5 @@ export function startsDocumentFlowAfterTag(name: string): boolean {
     return false;
   }
 
-  const branchNames = [...descriptors]
-    .filter(([, descriptor]) => descriptor.role === "branch")
-    .map(([branchName]) => branchName);
   return branchNames.every((branchName) => !name.startsWith(branchName));
 }

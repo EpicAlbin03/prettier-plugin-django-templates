@@ -1,0 +1,25 @@
+<pre class="sample" id="test">{% if x %}a{% endif %}</pre>
+<textarea class="sample" id="test">{% if x %}a{% endif %}</textarea>
+<pre><span>{% if x %}a{% endif %}</span></pre>
+<textarea><fake title="{% if x %}a{% endif %}</textarea>
+<pre>{{value}}{% if x %}a{% endif %}{% now 'Y' %}</pre>
+{% if outer %}<pre>{% if x %}a{% endif %}</pre>{% endif %}
+<pre>{% if x %}
+  a
+    b
+{% endif %}</pre>
+<textarea>{% if x %}
+  a
+    b
+{% endif %}</textarea>
+<pre>
+<span class="sample" id="test">{% if x %}a{% endif %}</span>
+</pre>
+<textarea>
+<span class="sample" id="test">{% if x %}a{% endif %}</span>
+</textarea>
+<textarea><span
+>{% if x %}a{% endif %}</span
+></textarea>
+<pre>{% if x %}a{% endif %}   {% if y %}b{% endif %}</pre>
+<div>{% if x %}a{% endif %}</div>

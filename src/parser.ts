@@ -1,5 +1,5 @@
-import type { Parser } from "prettier";
-import { scanHtmlHostContexts } from "./html-host-context.js";
+import { protectHtmlComments, type HtmlCommentRange } from "./comment-preservation.js";
+import { isInlineHtmlElement, scanHtmlHostContexts } from "./html-host-context.js";
 import { InternalMarkerAllocator } from "./internal-markers.js";
 import {
   findRawBodyEnd,
@@ -15,16 +15,21 @@ import {
   isRawBodyTag,
 } from "./tags.js";
 import type {
-  TemplateBlockNode,
   CommentNode,
-  DjangoNode,
   ExpressionNode,
   IgnoreRegionNode,
   ProtectedMarkerKind,
   RawBlockNode,
-  RootNode,
-  TemplateTagNode,
 } from "./ast.js";
+
+import type { RootNode } from "./ast.js";
+import {
+  finishDocument,
+  type DraftRoot,
+  type DraftBlock as TemplateBlockNode,
+  type DraftTag as TemplateTagNode,
+  type DraftNode as DjangoNode,
+} from "./ast-builders.js";
 
 const NOT_FOUND = -1;
 
@@ -38,6 +43,8 @@ interface TokenBase {
   end: number;
   inAttribute: boolean;
   inTag: boolean;
+  inPreformatted: boolean;
+  inInlineFlow: boolean;
 }
 
 interface TextToken extends TokenBase {
@@ -80,12 +87,9 @@ type Token =
   | TagToken
   | RawBlockToken;
 
-function readUntil(text: string, start: number, endToken: string, errorMessage?: string): number {
+function readUntil(text: string, start: number, endToken: string): number {
   const end = text.indexOf(endToken, start);
   if (end === -1) {
-    if (errorMessage) {
-      throw new Error(errorMessage);
-    }
     return text.length;
   }
   return end + endToken.length;
@@ -100,7 +104,7 @@ function createTextToken(
   text: string,
   start: number,
   end: number,
-  state: { inAttribute: boolean; inTag: boolean },
+  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted" | "inInlineFlow">,
 ): TextToken {
   return {
     type: "Text",
@@ -108,13 +112,15 @@ function createTextToken(
     content: text,
     start,
     end,
-    inAttribute: state.inAttribute,
-    inTag: state.inTag,
+    ...state,
   };
 }
 
 function normalizeTemplateTagContent(content: string): string {
   const trimmed = content.trim();
+  // Most tags already use single ASCII spaces. Quoted whitespace only makes
+  // this check conservative; the quote-aware path still handles it below.
+  if (!/[^\S ]| {2}/.test(trimmed)) return trimmed;
   let normalized = "";
   let pendingSpace = false;
   let quote: '"' | "'" | undefined;
@@ -164,22 +170,22 @@ function createTagToken(
   raw: string,
   start: number,
   end: number,
-  state: { inAttribute: boolean; inTag: boolean },
+  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted" | "inInlineFlow">,
 ): TagToken {
   const content = normalizeTemplateTagContent(raw.slice(2, -2));
-  const [name = "", ...rest] = content.split(/\s+/);
+  const name = content.split(/\s+/, 1)[0];
+  const args = content.slice(name.length).trimStart();
 
   return {
     type: "Tag",
     raw,
     content,
     name,
-    args: rest.join(" "),
-    role: getTagRole(name),
+    args,
+    role: getTagRole(name, args),
     start,
     end,
-    inAttribute: state.inAttribute,
-    inTag: state.inTag,
+    ...state,
   };
 }
 
@@ -194,23 +200,52 @@ function findIgnoreRegionEnd(
     : { end: closerStart + delimiter.closer.length, closed: true };
 }
 
-function tokenize(text: string): Token[] {
+function tokenize(text: string) {
+  // HTML context is irrelevant when no construct can produce a Django node.
+  if (!/{[{#%]|<!-- prettier-ignore-start -->/.test(text)) {
+    return {
+      tokens: [
+        createTextToken(text, 0, text.length, {
+          inAttribute: false,
+          inTag: false,
+          inPreformatted: false,
+          inInlineFlow: false,
+        }),
+      ],
+      preserveOriginalText: false,
+      htmlComments: [],
+    };
+  }
   const hostContexts = scanHtmlHostContexts(text);
   const tokens: Token[] = [];
   const specialPattern = /{{|{#|{%|<!--/g;
+  // Python's non-DOTALL dot excludes LF, but permits CR and Unicode line separators.
+  const templatePattern = /{{[^\n]*?}}|{#[^\n]*?#}|{%[^\n]*?%}/y;
   let cursor = 0;
+  let preserveOriginalText = false;
+  let htmlComment: HtmlCommentRange | undefined;
+  const htmlComments: HtmlCommentRange[] = [];
 
   while (cursor < text.length) {
     const hostContext = hostContexts.at(cursor);
     const tokenState = {
       inAttribute: hostContext === "attribute-value",
       inTag: hostContext !== "document-flow",
+      inPreformatted: hostContext === "document-flow" && hostContexts.isPreformattedAt(cursor),
+      inInlineFlow:
+        hostContext === "document-flow" &&
+        (/^(script|style|title)$/.test(hostContexts.elementAt(cursor) ?? "") ||
+          (isInlineHtmlElement(hostContexts.elementAt(cursor)) &&
+            /\S/.test(text[cursor - 1] ?? ""))),
     };
 
     const ignoreDelimiter = IGNORE_REGION_DELIMITERS.find(({ opener }) =>
       text.startsWith(opener, cursor),
     );
     if (ignoreDelimiter) {
+      if (htmlComment && cursor < htmlComment.end) {
+        htmlComment.hasTemplateSyntax = true;
+      }
       const { end, closed } = findIgnoreRegionEnd(
         text,
         cursor + ignoreDelimiter.opener.length,
@@ -223,8 +258,7 @@ function tokenize(text: string): Token[] {
         content: raw,
         start: cursor,
         end,
-        inAttribute: tokenState.inAttribute,
-        inTag: tokenState.inTag,
+        ...tokenState,
         closed,
       });
       cursor = end;
@@ -232,20 +266,40 @@ function tokenize(text: string): Token[] {
     }
 
     if (text.startsWith("<!--", cursor)) {
-      const end = readUntil(text, cursor + 4, "-->");
+      if (!htmlComment || cursor >= htmlComment.end) {
+        htmlComment = {
+          start: cursor,
+          end: readUntil(text, cursor + 4, "-->"),
+          hasTemplateSyntax: false,
+        };
+        htmlComments.push(htmlComment);
+      }
+      const end = Math.min(htmlComment.end, findNextSpecial(text, cursor + 4, specialPattern));
       const raw = text.slice(cursor, end);
       tokens.push(createTextToken(raw, cursor, end, tokenState));
       cursor = end;
       continue;
     }
 
+    templatePattern.lastIndex = cursor;
+    const templateMatch = templatePattern.exec(text);
+    // Validate Django syntax even inside HTML comments; preserve only the affected
+    // ranges after the complete template structure (including crossing blocks) is known.
+    if (templateMatch && htmlComment && cursor < htmlComment.end) {
+      htmlComment.hasTemplateSyntax = true;
+    }
+    if (!templateMatch && /^{[{#%]/.test(text.slice(cursor, cursor + 2))) {
+      // Formatting literal delimiters could remove the LF that prevents Django recognition.
+      // Preserve the document, but keep scanning so nested valid constructs are still parsed.
+      preserveOriginalText = true;
+      const end = findNextSpecial(text, cursor + 1, specialPattern);
+      tokens.push(createTextToken(text.slice(cursor, end), cursor, end, tokenState));
+      cursor = end;
+      continue;
+    }
+
     if (text.startsWith("{{", cursor)) {
-      const end = readUntil(
-        text,
-        cursor + 2,
-        "}}",
-        `Unterminated template expression starting at index ${cursor}.`,
-      );
+      const end = cursor + templateMatch![0].length;
       const raw = text.slice(cursor, end);
       tokens.push({
         type: "Expression",
@@ -253,20 +307,14 @@ function tokenize(text: string): Token[] {
         content: raw.slice(2, -2),
         start: cursor,
         end,
-        inAttribute: tokenState.inAttribute,
-        inTag: tokenState.inTag,
+        ...tokenState,
       });
       cursor = end;
       continue;
     }
 
     if (text.startsWith("{#", cursor)) {
-      const end = readUntil(
-        text,
-        cursor + 2,
-        "#}",
-        `Unterminated template comment starting at index ${cursor}.`,
-      );
+      const end = cursor + templateMatch![0].length;
       const raw = text.slice(cursor, end);
       tokens.push({
         type: "Comment",
@@ -274,24 +322,18 @@ function tokenize(text: string): Token[] {
         content: raw.slice(2, -2),
         start: cursor,
         end,
-        inAttribute: tokenState.inAttribute,
-        inTag: tokenState.inTag,
+        ...tokenState,
       });
       cursor = end;
       continue;
     }
 
     if (text.startsWith("{%", cursor)) {
-      const end = readUntil(
-        text,
-        cursor + 2,
-        "%}",
-        `Unterminated template tag starting at index ${cursor}.`,
-      );
+      const end = cursor + templateMatch![0].length;
       const raw = text.slice(cursor, end);
       const tag = createTagToken(raw, cursor, end, tokenState);
 
-      if (isRawBodyTag(tag.name) && !tag.inTag && !tag.inAttribute) {
+      if (isRawBodyTag(tag.name)) {
         const openingContent = raw.slice(2, -2).trim();
         const blockEndInfo = findRawBodyEnd(text, end, tag.name, openingContent);
         if (blockEndInfo) {
@@ -306,8 +348,7 @@ function tokenize(text: string): Token[] {
             endArgs: blockEndInfo.endArgs,
             start: cursor,
             end: blockEndInfo.end,
-            inAttribute: tokenState.inAttribute,
-            inTag: tokenState.inTag,
+            ...tokenState,
           });
           cursor = blockEndInfo.end;
           continue;
@@ -323,8 +364,7 @@ function tokenize(text: string): Token[] {
             args: tag.args,
             start: cursor,
             end: text.length,
-            inAttribute: tokenState.inAttribute,
-            inTag: tokenState.inTag,
+            ...tokenState,
           });
           cursor = text.length;
           continue;
@@ -341,37 +381,16 @@ function tokenize(text: string): Token[] {
     cursor = next;
   }
 
-  return tokens;
+  return { tokens, preserveOriginalText, htmlComments };
 }
 
 function countPreNewLines(text: string, to: number): number {
-  let from = to;
-  while (from > 0 && /\s/.test(text[from - 1])) {
-    from -= 1;
+  let count = 0;
+  while (to > 0 && /\s/.test(text[to - 1])) {
+    to -= 1;
+    if (text[to] === "\n") count += 1;
   }
-
-  const segment = text.slice(from, to);
-  if (!/^\s*$/.test(segment)) {
-    return 0;
-  }
-
-  return segment.split("\n").length - 1;
-}
-
-function normalizeRaw(token: Token): string {
-  switch (token.type) {
-    case "Expression":
-      return `{{ ${token.content.trim()} }}`;
-    case "Comment":
-      return `{# ${token.content.trim()} #}`;
-    case "Tag":
-      return `{% ${token.content.trim()} %}`;
-    case "RawBlock":
-    case "IgnoreRegion":
-      return token.raw;
-    default:
-      return token.raw;
-  }
+  return count;
 }
 
 function matchesEnd(start: TemplateTagNode, endName: string): boolean {
@@ -402,6 +421,7 @@ function getStandaloneTagsWithLaterEnds(tokens: Token[]): Set<number> {
 
     if (
       token.role === "standalone" &&
+      getTagRole(token.name) !== "start" &&
       getExpectedEndNames(token.name).some((endName) => laterTagNames.has(endName))
     ) {
       matches.add(index);
@@ -430,6 +450,13 @@ function followsIgnoredRegionOrHtmlComment(tokens: Token[], index: number): bool
 }
 
 function protectedMarkerKindForToken(token: Token, forceBlock = false): ProtectedMarkerKind {
+  // Block markers invite HTML layout whitespace even when their source is preserved.
+  if (
+    token.inPreformatted ||
+    (token.inInlineFlow && token.type === "Tag" && token.role === "standalone")
+  ) {
+    return "inline";
+  }
   if (token.inTag && !token.inAttribute) {
     return "attr";
   }
@@ -451,26 +478,27 @@ function protectedMarkerKindForToken(token: Token, forceBlock = false): Protecte
 
 interface OpenBlock {
   start: TemplateTagNode;
-  openingRaw: string;
   parts: string[];
   childIds: string[];
 }
 
-export const parse: Parser<DjangoNode>["parse"] = (text) => {
-  const tokens = tokenize(text);
+export function parse(text: string): RootNode {
+  const { tokens, preserveOriginalText, htmlComments } = tokenize(text);
   const standaloneTagsWithLaterEnds = getStandaloneTagsWithLaterEnds(tokens);
   const nodes: Record<string, DjangoNode> = {};
   const rootParts: string[] = [];
-  const root: RootNode = {
+  const root: DraftRoot = {
     type: "root",
     id: "root",
-    content: "",
-    originalText: text,
+    html: "",
+    sourceText: text,
+    preserveOriginalText,
     preNewLines: 0,
     sourceStart: 0,
     sourceEnd: text.length,
     nodes,
     protectedMarkerKind: "block",
+    hostContext: "document-flow",
   };
 
   const markerAllocator = new InternalMarkerAllocator(text);
@@ -496,13 +524,23 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
     }
   };
 
+  // Track line breaks once instead of rescanning overlapping source slices at
+  // every block closure (quadratic for deeply nested single-line templates).
+  const leadingWhitespaceEnd = text.search(/\S/);
+  let lastNewline = -1;
+  let nextNewline = text.indexOf("\n");
   for (const [tokenIndex, token] of tokens.entries()) {
+    while (nextNewline !== -1 && nextNewline < token.end) {
+      lastNewline = nextNewline;
+      nextNewline = text.indexOf("\n", nextNewline + 1);
+    }
     if (token.type === "Text") {
       append(token.raw);
       continue;
     }
 
-    const rawPreNewLines = countPreNewLines(text, token.start);
+    const rawPreNewLines =
+      token.start === leadingWhitespaceEnd ? 0 : countPreNewLines(text, token.start);
     const preNewLines =
       rawPreNewLines > 1 && followsIgnoredRegionOrHtmlComment(tokens, tokenIndex)
         ? rawPreNewLines - 1
@@ -514,13 +552,17 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         type: "expression",
         id,
         content: token.content,
-        originalText: normalizeRaw(token),
+        sourceText: token.raw,
+        preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
         protectedMarkerKind: protectedMarkerKindForToken(token),
-        inTag: token.inTag,
-        inAttribute: token.inAttribute,
+        hostContext: token.inAttribute
+          ? "attribute-value"
+          : token.inTag
+            ? "start-tag"
+            : "document-flow",
       };
       nodes[id] = node;
       append(id, id);
@@ -533,13 +575,17 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         type: "comment",
         id,
         content: token.content,
-        originalText: normalizeRaw(token),
+        sourceText: token.raw,
+        preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
         protectedMarkerKind: protectedMarkerKindForToken(token),
-        inTag: token.inTag,
-        inAttribute: token.inAttribute,
+        hostContext: token.inAttribute
+          ? "attribute-value"
+          : token.inTag
+            ? "start-tag"
+            : "document-flow",
       };
       nodes[id] = node;
       append(id, id);
@@ -552,13 +598,17 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         type: "ignore-region",
         id,
         content: token.raw,
-        originalText: token.raw,
+        sourceText: token.raw,
+        preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
         protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
-        inTag: token.inTag,
-        inAttribute: token.inAttribute,
+        hostContext: token.inAttribute
+          ? "attribute-value"
+          : token.inTag
+            ? "start-tag"
+            : "document-flow",
         closed: token.closed,
       };
       nodes[id] = node;
@@ -572,13 +622,17 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
         type: "raw-block",
         id,
         content: token.raw,
-        originalText: token.raw,
+        sourceText: token.raw,
+        preserveOriginalText: token.inPreformatted,
         preNewLines,
         sourceStart: token.start,
         sourceEnd: token.end,
         protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
-        inTag: token.inTag,
-        inAttribute: token.inAttribute,
+        hostContext: token.inAttribute
+          ? "attribute-value"
+          : token.inTag
+            ? "start-tag"
+            : "document-flow",
         keyword: token.name,
         args: token.args,
         body: token.body,
@@ -589,38 +643,37 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       continue;
     }
 
-    const templateTagBase = {
+    const node: TemplateTagNode = {
+      type: "template-tag",
       id: createId(token),
       content: token.content,
-      originalText: normalizeRaw(token),
+      sourceText: token.raw,
+      preserveOriginalText: token.inPreformatted,
       preNewLines,
       sourceStart: token.start,
       sourceEnd: token.end,
       keyword: token.name,
       role: token.role,
       protectedMarkerKind: protectedMarkerKindForToken(token),
-      inTag: token.inTag,
-      inAttribute: token.inAttribute,
-    } as const;
+      hostContext: token.inAttribute
+        ? "attribute-value"
+        : token.inTag
+          ? "start-tag"
+          : "document-flow",
+    };
     if (token.role === "branch") {
       if (!hasMatchingBranchParent(token, stack)) {
-        throw new Error(
-          `No start tag found for template branch tag "${templateTagBase.originalText}".`,
-        );
+        throw new Error(`No start tag found for template branch tag "{% ${node.content} %}".`);
       }
 
-      const node: TemplateTagNode = { type: "template-tag", ...templateTagBase };
       nodes[node.id] = node;
       append(node.id, node.id);
       continue;
     }
 
     if (actsAsEndTag(token, expectedEndCounts)) {
-      const endNode: TemplateTagNode = {
-        type: "template-tag",
-        ...templateTagBase,
-        role: "end",
-      };
+      const endNode = node;
+      endNode.role = "end";
       nodes[endNode.id] = endNode;
 
       let matchIndex = NOT_FOUND;
@@ -632,67 +685,71 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
       }
 
       if (matchIndex === NOT_FOUND) {
-        throw new Error(`No start tag found for template end tag "${endNode.originalText}".`);
+        throw new Error(`No start tag found for template end tag "{% ${endNode.content} %}".`);
       }
       if (matchIndex !== stack.length - 1) {
         const innerOpen = stack.at(-1)!.start;
         throw new Error(
-          `Unexpected template end tag "${endNode.originalText}" while "${innerOpen.originalText}" is still open.`,
+          `Unexpected template end tag "{% ${endNode.content} %}" while "{% ${innerOpen.content} %}" is still open.`,
         );
       }
 
       const frame = stack.pop()!;
       updateExpectedEnds(frame.start.keyword, -1);
       const content = frame.parts.join("");
-      const blockText = `${frame.openingRaw}${content}${token.raw}`;
+      const blockText = text.slice(frame.start.sourceStart, token.end);
       const blockId = markerAllocator.allocate(
-        protectedMarkerKindForToken(token, !frame.start.inTag && !frame.start.inAttribute),
+        protectedMarkerKindForToken(token, frame.start.hostContext === "document-flow"),
       );
       const blockNode: TemplateBlockNode = {
         type: "template-block",
         id: blockId,
-        content,
-        originalText: blockText,
+        html: content,
+        sourceText: blockText,
         preNewLines: frame.start.preNewLines,
         sourceStart: frame.start.sourceStart,
         sourceEnd: token.end,
         nodes,
-        protectedMarkerKind: frame.start.inTag || frame.start.inAttribute ? "inline" : "block",
+        protectedMarkerKind:
+          frame.start.hostContext === "start-tag"
+            ? "attr"
+            : frame.start.hostContext === "attribute-value" || frame.start.preserveOriginalText
+              ? "inline"
+              : "block",
+        preserveOriginalText: frame.start.preserveOriginalText,
         start: frame.start,
         end: endNode,
         childIds: frame.childIds,
-        containsNewLines: /\n/.test(blockText),
-        inTag: frame.start.inTag,
-        inAttribute: frame.start.inAttribute,
+        containsNewLines: lastNewline >= frame.start.sourceStart,
+        hostContext: frame.start.hostContext,
       };
-      const parentBlockHasHtmlMarkup = /<(?!!--)[A-Za-z/!][^>]*>/.test(content);
+      const parentBlockHasHtmlMarkup = scanHtmlHostContexts(content).tags.length > 0;
       frame.start.parentBlockId = blockId;
       endNode.parentBlockId = blockId;
       endNode.parentBlockRelationship = "end";
-      endNode.parentBlockInTag = blockNode.inTag;
-      endNode.parentBlockInAttribute = blockNode.inAttribute;
-      endNode.parentBlockHasHtmlMarkup = parentBlockHasHtmlMarkup;
+      const parentBlockContext = {
+        host: blockNode.hostContext,
+        hasHtmlMarkup: parentBlockHasHtmlMarkup,
+      };
+      endNode.parentBlockContext = parentBlockContext;
       for (const childId of frame.childIds) {
         const child = nodes[childId];
         child.parentBlockId = blockId;
         child.parentBlockRelationship = "content";
-        child.parentBlockInTag = blockNode.inTag;
-        child.parentBlockInAttribute = blockNode.inAttribute;
-        child.parentBlockHasHtmlMarkup = parentBlockHasHtmlMarkup;
+        child.parentBlockContext = parentBlockContext;
       }
       nodes[blockId] = blockNode;
       append(blockId, blockId);
       continue;
     }
 
-    const node: TemplateTagNode = { type: "template-tag", ...templateTagBase };
     nodes[node.id] = node;
     if (token.role === "standalone" && !standaloneTagsWithLaterEnds.has(tokenIndex)) {
       append(node.id, node.id);
       continue;
     }
 
-    stack.push({ start: node, openingRaw: token.raw, parts: [], childIds: [] });
+    stack.push({ start: node, parts: [], childIds: [] });
     updateExpectedEnds(node.keyword, 1);
   }
 
@@ -703,6 +760,9 @@ export const parse: Parser<DjangoNode>["parse"] = (text) => {
     }
   }
 
-  root.content = rootParts.join("");
-  return root;
-};
+  root.html = rootParts.join("");
+  if (!preserveOriginalText) {
+    protectHtmlComments(root, htmlComments, markerAllocator);
+  }
+  return finishDocument(root);
+}

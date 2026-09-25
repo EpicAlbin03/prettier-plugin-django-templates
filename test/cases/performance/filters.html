@@ -1,0 +1,11 @@
+{% load humanize i18n %}
+<article lang="{{ language_code|default:'en' }}" data-slug="{{ article.title|slugify }}">
+<h1>{{ article.title|default:"Untitled"|title }}</h1>
+<p class="byline">{{ article.author.get_full_name|default:article.author.username }} · {{ article.published_at|date:"F j, Y" }}</p>
+<p>{{ article.summary|striptags|truncatewords:40 }}</p>
+<div class="body">{{ article.body|linebreaks }}</div>
+<ul>{% for tag in article.tags.all|dictsort:"name" %}<li>{{ tag.name|lower }}</li>{% endfor %}</ul>
+<footer><span>{{ article.views|intcomma }} view{{ article.views|pluralize }}</span><time datetime="{{ article.updated_at|date:'c' }}">{{ article.updated_at|naturaltime }}</time></footer>
+{% blocktranslate with name=article.author.first_name %}More stories by {{ name }}{% endblocktranslate %}
+<p>Café &amp; résumé — {{ article.subtitle|default:"こんにちは" }}</p>
+</article>

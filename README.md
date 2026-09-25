@@ -2,6 +2,11 @@
 
 Format Django HTML templates with Prettier.
 
+## Prerequisites
+
+- Node.js 22+
+- Prettier 3
+
 ## Install
 
 ```bash
@@ -34,8 +39,35 @@ The plugin provides the `django-html` parser for Django HTML templates in `.html
 }
 ```
 
-## Ignore regions
+## Inline element whitespace
 
+Prettier preserves whitespace around inline elements by default, which can produce formatting like this:
+
+```html
+<a href="{% url 'detail' object.pk %}" title="{{ object.title }}"
+  >{{ object.title }}</a
+>
+```
+
+To allow Prettier to normalize the whitespace, set [htmlWhitespaceSensitivity](https://prettier.io/docs/options#html-whitespace-sensitivity) to `ignore`:
+
+```json
+{
+  "htmlWhitespaceSensitivity": "ignore"
+}
+```
+
+The same element will then be formatted as:
+
+```html
+<a href="{% url 'detail' object.pk %}" title="{{ object.title }}">
+  {{ object.title }}
+</a>
+```
+
+This can change how whitespace renders between inline elements.
+
+## Ignore regions
 
 Ignore regions tell the plugin to leave part of a Django HTML template unchanged:
 
@@ -69,13 +101,16 @@ Or using template comments:
 {# prettier-ignore-end #}
 ```
 
+To preserve a specific attribute exactly as written, place an attribute ignore directive immediately before the element:
+
+```html
+<!-- prettier-ignore-attribute data-label -->
+<div data-label = "{{label}}" class="message">{{ message }}</div>
+```
+
 ## Usage in the browser
 
 Import `prettier-plugin-django-templates/browser` from an ESM-aware bundler to get an entry that depends on `prettier/standalone` and does not use Node APIs. The browser entry is intended for bundlers such as Vite. It is not a self-contained bundle and direct no-build CDN or script-tag usage is not supported.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, package validation, and changeset requirements.
 
 ## Credits
 

@@ -1,3 +1,4 @@
+import type { DjangoNode } from "./ast.js";
 export type InternalMarkerKind = "inline" | "block" | "attr" | "temporary-run";
 
 export const INLINE_MARKER_SOURCE = String.raw`DJ\d+X`;
@@ -40,7 +41,8 @@ export class InternalMarkerAllocator {
   }
 
   #reserveIdsFrom(value: string): void {
-    const markerPattern = /DJ(\d+)X|<!--DJ(\d+)-->|dj(\d+)=""|DJ_INLINE_RUN_(\d+)(?:_X)?/g;
+    // Reserve attribute names too: HTML normalizes quotes and spacing around '='.
+    const markerPattern = /DJ(\d+)X|<!--DJ(\d+)-->|\bdj(\d+)\b|DJ_INLINE_RUN_(\d+)(?:_X)?/g;
     for (const match of value.matchAll(markerPattern)) {
       const id = match.slice(1).find((part) => part !== undefined);
       if (id !== undefined) {
@@ -74,6 +76,19 @@ export class InternalMarkerAllocator {
       throw new Error("Cannot restore an internal marker that was not allocated.");
     }
 
-    return value.replace(new RegExp(escapeMarkerForRegExp(marker), "g"), replacement);
+    return value.replace(new RegExp(escapeMarkerForRegExp(marker), "g"), () => replacement);
   }
+}
+
+export function markerEntries(
+  value: string,
+  nodes: Readonly<Record<string, DjangoNode>>,
+): Array<{ id: string; index: number }> {
+  const entries: Array<{ id: string; index: number }> = [];
+  for (const match of value.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))) {
+    if (nodes[match[0]]) {
+      entries.push({ id: match[0], index: match.index });
+    }
+  }
+  return entries;
 }

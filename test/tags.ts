@@ -1,6 +1,5 @@
 import { format } from "prettier";
 import { describe, expect, test } from "vitest";
-import type { RootNode } from "../src/ast.js";
 import * as DjangoPlugin from "../src/index.js";
 import { parse } from "../src/parser.js";
 import {
@@ -24,10 +23,44 @@ const formatTemplate = (source: string) =>
 
 const descriptors = getTagDescriptors();
 
-async function parseTemplate(source: string): Promise<RootNode> {
-  const parseSource = parse as unknown as (text: string) => RootNode | Promise<RootNode>;
-  return await parseSource(source);
-}
+test("comment blocks only close on the exact endcomment token", async () => {
+  const source = "{% comment %}{% endcomment note %}ignored{% endcomment %}";
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
+
+test("comment terminator scanning respects the Django lexer's verbatim state", async () => {
+  const source = "{% comment %}{% verbatim %}{% endcomment %}{% endverbatim %}{% endcomment %}";
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
+
+test.each(["component", "slot"])(
+  "accepts a self-closing django-components %s tag inside another block",
+  async (tag) => {
+    const source = `{% if x %}{% ${tag} "card" / %}{% endif %}`;
+    const output = await formatTemplate(source);
+    expect(output).toBe(`{% if x %}\n  {% ${tag} "card" / %}\n{% endif %}\n`);
+    expect(await formatTemplate(output)).toBe(output);
+  },
+);
+
+test("treats a CMS placeholder without 'or' as standalone", async () => {
+  const source = '{% if x %}{% placeholder "content" %}{% endif %}';
+  const output = await formatTemplate(source);
+  expect(output).toBe('{% if x %}\n  {% placeholder "content" %}\n{% endif %}\n');
+  expect(await formatTemplate(output)).toBe(output);
+});
+
+test.each(["switch", "sample"])("accepts else inside django-waffle %s", async (tag) => {
+  const source = `{% ${tag} "feature" %}yes{% else %}no{% end${tag} %}`;
+  const output = await formatTemplate(source);
+  expect(output).toBe(`{% ${tag} "feature" %}\n  yes\n{% else %}\n  no\n{% end${tag} %}\n`);
+  expect(await formatTemplate(output)).toBe(output);
+});
+
+test("comment tag notes retain quoted whitespace", async () => {
+  const source = '{% comment "keep  these  spaces" %}hidden{% endcomment %}';
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
 
 describe("template tag descriptor registry", () => {
   test("classifies every descriptor through its authoritative role", () => {
@@ -37,16 +70,13 @@ describe("template tag descriptor registry", () => {
 
     const namesByRole = {
       start: [...descriptors]
-        .filter(([, descriptor]) => descriptor.role === "start")
-        .map(([name]) => name)
+        .flatMap(([name, descriptor]) => (descriptor.role === "start" ? [name] : []))
         .sort(),
       branch: [...descriptors]
-        .filter(([, descriptor]) => descriptor.role === "branch")
-        .map(([name]) => name)
+        .flatMap(([name, descriptor]) => (descriptor.role === "branch" ? [name] : []))
         .sort(),
       standalone: [...descriptors]
-        .filter(([, descriptor]) => descriptor.role === "standalone")
-        .map(([name]) => name)
+        .flatMap(([name, descriptor]) => (descriptor.role === "standalone" ? [name] : []))
         .sort(),
     };
     expect(namesByRole).toMatchInlineSnapshot(`
@@ -172,13 +202,13 @@ describe("template tag descriptor registry", () => {
 
   test.each([
     ["elif", ["if"]],
-    ["else", ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag"]],
+    ["else", ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag", "switch", "sample"]],
     ["empty", ["for"]],
     ["plural", ["blocktranslate", "blocktrans"]],
   ])("defines the complete %s parent matrix", (branch, parents) => {
-    const startNames = [...descriptors]
-      .filter(([, descriptor]) => descriptor.role === "start")
-      .map(([name]) => name);
+    const startNames = [...descriptors].flatMap(([name, descriptor]) =>
+      descriptor.role === "start" ? [name] : [],
+    );
 
     for (const parent of startNames) {
       expect(isPermittedBranch(parent, branch), `${branch} in ${parent}`).toBe(
@@ -189,13 +219,14 @@ describe("template tag descriptor registry", () => {
   });
 
   test("owns raw-body, flow, and start-tag formatting behavior", () => {
-    expect([...descriptors].filter(([name]) => isRawBodyTag(name)).map(([name]) => name)).toEqual([
+    expect([...descriptors].flatMap(([name]) => (isRawBodyTag(name) ? [name] : []))).toEqual([
       "comment",
       "verbatim",
     ]);
     expect(hasExactRawBodyEnd("comment")).toBe(false);
     expect(hasExactRawBodyEnd("verbatim")).toBe(true);
-    expect(matchesRawBodyEnd("comment", "comment", "endcomment optional")).toBe(true);
+    expect(matchesRawBodyEnd("comment", "comment", "endcomment optional")).toBe(false);
+    expect(matchesRawBodyEnd("comment", "comment", "endcomment")).toBe(true);
     expect(matchesRawBodyEnd("verbatim", "verbatim named", "endverbatim named")).toBe(true);
     expect(matchesRawBodyEnd("verbatim", "verbatim named", "endverbatim other")).toBe(false);
 
@@ -247,7 +278,7 @@ describe("custom and ecosystem tag regressions", () => {
       ["{% panel_custom_end %}x{% panelend %}", "panelend"],
       ["{% dnd_panel %}x{% end_dnd_panel %}", "end_dnd_panel"],
     ]) {
-      const root = await parseTemplate(source);
+      const root = parse(source);
       const block = Object.values(root.nodes).find((node) => node.type === "template-block");
       expect(block?.type).toBe("template-block");
       if (block?.type === "template-block") {

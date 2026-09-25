@@ -1,4 +1,6 @@
+import { format } from "prettier";
 import { describe, expect, test } from "vitest";
+import * as DjangoPlugin from "../src/index.js";
 import {
   ATTRIBUTE_MARKER_SOURCE,
   BLOCK_MARKER_SOURCE,
@@ -6,21 +8,33 @@ import {
   escapeMarkerForRegExp,
   INLINE_MARKER_SOURCE,
   InternalMarkerAllocator,
+  type InternalMarkerKind,
   TEMPORARY_RUN_MARKER_SOURCE,
 } from "../src/internal-markers.js";
 
-const markerSources = {
-  inline: INLINE_MARKER_SOURCE,
-  block: BLOCK_MARKER_SOURCE,
-  attr: ATTRIBUTE_MARKER_SOURCE,
-  "temporary-run": TEMPORARY_RUN_MARKER_SOURCE,
-} as const;
+const formatTemplate = (source: string) =>
+  format(source, { parser: "django-html", plugins: [DjangoPlugin] });
+
+const markerSources: Array<[InternalMarkerKind, string]> = [
+  ["inline", INLINE_MARKER_SOURCE],
+  ["block", BLOCK_MARKER_SOURCE],
+  ["attr", ATTRIBUTE_MARKER_SOURCE],
+  ["temporary-run", TEMPORARY_RUN_MARKER_SOURCE],
+];
+
+describe("attribute marker collisions after HTML normalization", () => {
+  test.each(["dj0=''", 'dj0 = ""'])("preserves the real attribute %s", async (attribute) => {
+    await expect(formatTemplate(`<div ${attribute} {{attrs}}></div>`)).resolves.toBe(
+      '<div dj0="" {{ attrs }}></div>\n',
+    );
+  });
+});
 
 describe("internal marker ownership", () => {
-  test.each(Object.entries(markerSources))(
+  test.each(markerSources)(
     "recognizes every generated %s marker through the authoritative syntax",
     (kind, source) => {
-      const marker = new InternalMarkerAllocator("").allocate(kind as keyof typeof markerSources);
+      const marker = new InternalMarkerAllocator("").allocate(kind);
       expect(marker).toMatch(new RegExp(`^(?:${source})$`));
       expect(containsBlockMarker(marker)).toBe(kind === "block");
     },

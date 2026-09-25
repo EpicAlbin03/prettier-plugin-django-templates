@@ -1,0 +1,11 @@
+<table>
+{% if show_bulk_controls %}
+<tr><td><input type = "checkbox" _="on change
+                  send refresh_total to {{ bulk_controls.total_target }}
+                  {% if allow_bulk_toggle %}if me.checked
+                     set {{ bulk_controls.toggle_target }}'s checked to true
+                     remove .is-hidden from {{ bulk_controls.actions_target }}
+                     send clear_pending to {{ bulk_controls.actions_target }}
+                  end{% endif %}" /></td></tr>
+{% endif %}
+</table>

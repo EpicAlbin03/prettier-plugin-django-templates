@@ -1,0 +1,12 @@
+<pre>{% if x %}a{% endif %}</pre>
+<textarea>{% if x %}a{% endif %}</textarea>
+<pre>
+  before{% if x %}a{% else %}{% for item in items %}{{item}}{% empty %}empty{% endfor %}{% endif %}after  </pre>
+<textarea>
+  before{% if x %}a{% endif %}
+  after
+</textarea>
+<div><pre>{% if x %}<b>{{value}}</b>{% endif %}</pre></div>
+<pre class="sample" title="a > b">{% if x %}  a
+    b{% endif %}</pre>
+<pre>{% if x %}a{% endif %}</pre>

@@ -1,7 +1,11 @@
 import { format } from "prettier";
 import { describe, expect, test } from "vitest";
-import type { DjangoNode, RootNode } from "../src/ast.js";
-import { scanHtmlHostContexts, type HtmlHostContext } from "../src/html-host-context.js";
+import type { DjangoNode } from "../src/ast.js";
+import {
+  scanHtmlHostContexts,
+  splitHtmlAttributes,
+  type HtmlHostContext,
+} from "../src/html-host-context.js";
 import * as DjangoPlugin from "../src/index.js";
 import { parse } from "../src/parser.js";
 
@@ -20,6 +24,18 @@ function offsetOf(source: string, needle: string, occurrence = 0): number {
 }
 
 describe("HTML host context scanner", () => {
+  test.each([
+    '<span title="<div>">marker</span>',
+    "<span title='<div>'>marker</span>",
+    "<span><!-- <div> -->marker</span>",
+    '<span><script>"<div>"</script>marker</span>',
+    "<span><br>marker</span>",
+  ])("tracks enclosing elements without reading quoted or raw markup: %s", (source) => {
+    const contexts = scanHtmlHostContexts(source);
+    expect(contexts.elementAt(source.indexOf("marker"))).toBe("span");
+    expect(contexts.elementAt(source.length)).toBeUndefined();
+  });
+
   test.each<{ name: string; source: string; expected: ExpectedContext[] }>([
     {
       name: "document flow and tag boundaries",
@@ -112,6 +128,17 @@ describe("HTML host context scanner", () => {
     }
   });
 
+  test.each([
+    '{{\n <span title="{{ value }}">text</span> }}',
+    '{#\n <span title="{{ value }}">text</span> #}',
+    '{%\n <span title="{{ value }}">text</span> %}',
+    '{# unfinished<span title="{{ value }}">text</span>',
+  ])("does not hide HTML inside literal Django delimiters: %j", (source) => {
+    const contexts = scanHtmlHostContexts(source);
+    expect(contexts.at(source.indexOf("{{ value }}"))).toBe("attribute-value");
+    expect(contexts.elementAt(source.indexOf("text"))).toBe("span");
+  });
+
   test("protects complete raw bodies and ignore regions from affecting later context", async () => {
     const source = `{% verbatim %}<fake title="{% endverbatim %}
 <!-- prettier-ignore-start --><broken value='<!-- prettier-ignore-end -->
@@ -120,22 +147,107 @@ describe("HTML host context scanner", () => {
     const afterOffset = offsetOf(source, "{{ after");
     expect(contexts.at(afterOffset)).toBe("document-flow");
 
-    const parseSource = parse as unknown as (text: string) => RootNode | Promise<RootNode>;
-    const root = await parseSource(source);
+    const root = parse(source);
     const after = Object.values(root.nodes).find(
       (node) => node.type === "expression" && node.content.trim() === "after",
     );
-    expect(after?.inTag).toBe(false);
-    expect(after?.inAttribute).toBe(false);
+    expect(after?.hostContext).toBe("document-flow");
   });
 
-  test("tracks post-render normalization safety independently of lexical host context", () => {
+  test("tracks whitespace normalization safety independently of lexical host context", () => {
     const source = `<div {% firstof a b %}><script>{{ value }}{% if enabled %}</script>text`;
     const contexts = scanHtmlHostContexts(source);
     expect(contexts.isDocumentFlowNormalizationSafeAt(offsetOf(source, "{% firstof"))).toBe(true);
     expect(contexts.at(offsetOf(source, "{% firstof"))).toBe("start-tag");
     expect(contexts.isDocumentFlowNormalizationSafeAt(offsetOf(source, "{{ value"))).toBe(false);
     expect(contexts.isDocumentFlowNormalizationSafeAt(offsetOf(source, "text"))).toBe(true);
+  });
+
+  test.each([
+    '<pre title="a > b">before<span>{{ value }}</span>after</pre>outside',
+    "<PRE><pre>before</pre>{{ value }}after</PRE>outside",
+    '<textarea>before<fake title="{{ value }}after</textarea>outside',
+    "<pre><textarea>before{{ value }}</textarea>after</pre>outside",
+    "<textarea>{% verbatim %}</textarea>{% endverbatim %}{{ value }}</textarea>outside",
+    "<pre><!-- </pre> -->{{ value }}</pre>outside",
+  ])("tracks preformatted content without changing lexical context: %s", (source) => {
+    const contexts = scanHtmlHostContexts(source);
+    const valueOffset = offsetOf(source, "{{ value }}");
+    expect(contexts.at(valueOffset)).toBe("document-flow");
+    expect(contexts.isPreformattedAt(valueOffset)).toBe(true);
+    expect(contexts.isDocumentFlowNormalizationSafeAt(valueOffset)).toBe(false);
+    expect(contexts.isPreformattedAt(offsetOf(source, "outside"))).toBe(false);
+    expect(contexts.isDocumentFlowNormalizationSafeAt(offsetOf(source, "outside"))).toBe(true);
+  });
+
+  test.each([
+    '<div title="<pre>">{{ value }}</div>',
+    "<!-- <pre> -->{{ value }}",
+    '<script>"<pre>"</script>{{ value }}',
+    "{% verbatim %}<pre>{% endverbatim %}{{ value }}",
+    "<pre></pre>{{ value }}",
+    "<textarea></textarea>{{ value }}",
+  ])("does not leak preformatted context: %s", (source) => {
+    expect(scanHtmlHostContexts(source).isPreformattedAt(offsetOf(source, "{{ value }}"))).toBe(
+      false,
+    );
+  });
+
+  test.each(["<pre>", "<textarea>"])("preserves unclosed %s content through EOF", (open) => {
+    const source = `${open}{{ value }}`;
+    expect(scanHtmlHostContexts(source).isPreformattedAt(offsetOf(source, "{{ value }}"))).toBe(
+      true,
+    );
+  });
+
+  test.each([
+    ["<div>", "document-flow", true, false],
+    ["<div ", "start-tag", true, false],
+    ['<div title="', "attribute-value", true, false],
+    ["<script>", "document-flow", false, false],
+    ["<style>", "document-flow", false, false],
+    ["<pre>", "document-flow", false, true],
+    ["<textarea>", "document-flow", false, true],
+  ] as const)("bulk-scanned text through EOF retains %s context", (prefix, host, safe, pre) => {
+    const source = prefix + "ordinary &amp; text 😀 \n\u2028 ".repeat(200);
+    const contexts = scanHtmlHostContexts(source);
+    for (let offset = prefix.length; offset < source.length; offset += 1) {
+      expect(contexts.at(offset)).toBe(host);
+      expect(contexts.isDocumentFlowNormalizationSafeAt(offset)).toBe(safe);
+      expect(contexts.isPreformattedAt(offset)).toBe(pre);
+    }
+  });
+
+  test.each([
+    [
+      " a=\"long value\" b='other value' disabled ",
+      ['a="long value"', "b='other value'", "disabled"],
+    ],
+    ['a="unterminated value ', ['a="unterminated value ']],
+    ['""\'\' x="a"suffix', ["\"\"''", 'x="a"suffix']],
+    ["a\u00a0b\u2028c\t\nd", ["a", "b", "c", "d"]],
+  ])("attribute slicing preserves quoted spelling: %s", (source, expected) => {
+    expect(splitHtmlAttributes(source)).toEqual(expected);
+  });
+
+  test("attribute source ranges include spacing and skip Django argument quotes", () => {
+    const source = `<div disabled title = "{{ value|default:"a > b" }}" data-x='one\n  {% if x == 'yes' %}two{% endif %}' bare={{value}}></div>`;
+    const { tags } = scanHtmlHostContexts(source);
+    expect(tags[0].attributeRanges.map(({ name }) => name)).toEqual([
+      "disabled",
+      "title",
+      "data-x",
+      "bare",
+    ]);
+    const spellings = tags[0].attributeRanges.map(({ start, end }) => source.slice(start, end));
+    expect(spellings).toEqual([
+      "disabled",
+      'title = "{{ value|default:"a > b" }}"',
+      "data-x='one\n  {% if x == 'yes' %}two{% endif %}'",
+      "bare={{value}}",
+    ]);
+    expect(tags[0].attributes).toEqual(spellings);
+    expect(tags[1].attributeRanges).toEqual([]);
   });
 
   test("defaults out-of-range offsets to conservative document flow", () => {
@@ -150,16 +262,14 @@ describe("HTML host context scanner", () => {
     const source =
       '<div {{ attrs }} title="{{ label }}{% if suffix %}-{{ suffix }}{% endif %}"><script>const html = "<fake>"; {{ payload }}</script></div>';
     const contexts = scanHtmlHostContexts(source);
-    const parseSource = parse as unknown as (text: string) => RootNode | Promise<RootNode>;
-    const root = await parseSource(source);
-    const contextForNode = (node: DjangoNode): HtmlHostContext =>
-      node.inAttribute ? "attribute-value" : node.inTag ? "start-tag" : "document-flow";
+    const root = parse(source);
+    const contextForNode = (node: DjangoNode): HtmlHostContext => node.hostContext;
 
     for (const node of Object.values(root.nodes)) {
       if (node.type === "root" || node.type === "template-block") {
         continue;
       }
-      expect(contextForNode(node), node.originalText).toBe(contexts.at(node.sourceStart));
+      expect(contextForNode(node), node.sourceText).toBe(contexts.at(node.sourceStart));
     }
 
     const formatted = await format(source, {

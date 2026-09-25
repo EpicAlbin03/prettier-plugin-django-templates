@@ -1,363 +1,31 @@
 import type { AstPath, Doc, Options, Printer } from "prettier";
 import { doc } from "prettier";
-import { scanHtmlHostContexts } from "./html-host-context.js";
+import { scanHtmlHostContexts, splitHtmlAttributes } from "./html-host-context.js";
+import { HtmlDocCache } from "./html-doc-cache.js";
+import { containsProtectedNodeMarker, replaceProtectedMarkersInString } from "./html-adapter.js";
+import { getDocumentPlan, prepareDocument, type ContainerPlan } from "./formatting-plan.js";
+import { formatExpression, getRawBlockText } from "./template-text.js";
 import {
-  ANY_MARKER_SOURCE,
+  markerEntries,
   ATTRIBUTE_MARKER_SOURCE,
   BLOCK_MARKER_SOURCE,
-  containsBlockMarker,
-  escapeMarkerForRegExp,
   INLINE_MARKER_SOURCE,
-  InternalMarkerAllocator,
-  PROTECTED_MARKER_SOURCE,
 } from "./internal-markers.js";
-import {
-  getStartTagFormatting,
-  isBranchTag,
-  startsDocumentFlowAfterExpression,
-  startsDocumentFlowAfterTag,
-} from "./tags.js";
-import type {
-  RootNode,
-  TemplateBlockNode,
-  DjangoNode,
-  ExpressionNode,
-  RawBlockNode,
-  TemplateTagNode,
-} from "./ast.js";
+import { getStartTagFormatting, isBranchTag } from "./tags.js";
+import type { TemplateBlockNode, DjangoNode, TemplateTagNode } from "./ast.js";
 
-const { builders, printer, utils } = doc;
+const { builders, utils } = doc;
 const { mapDoc } = utils;
-const { printDocToString } = printer;
 
-function getProtectedMarkerIds(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-): string[] {
-  if ("childIds" in node) {
-    return node.childIds;
+const htmlDocCaches = new WeakMap<Readonly<Record<string, DjangoNode>>, HtmlDocCache>();
+
+export const preprocess: Printer<DjangoNode>["preprocess"] = (node) => {
+  if (node.type === "root") {
+    htmlDocCaches.set(node.nodes, new HtmlDocCache(node.nodes));
+    return prepareDocument(node);
   }
-
-  return [...node.content.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))]
-    .map((match) => match[0])
-    .filter((id) => Boolean(node.nodes[id]));
-}
-
-function markerEntries(
-  value: string,
-  nodes: Record<string, DjangoNode>,
-): Array<{ id: string; index: number }> {
-  const entries: Array<{ id: string; index: number }> = [];
-  for (const match of value.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))) {
-    if (nodes[match[0]]) {
-      entries.push({ id: match[0], index: match.index });
-    }
-  }
-  return entries;
-}
-
-function containsProtectedNodeMarker(value: string, nodes: Record<string, DjangoNode>): boolean {
-  return markerEntries(value, nodes).length > 0;
-}
-
-function replaceProtectedMarkersInString(
-  currentDoc: string,
-  nodes: Record<string, DjangoNode>,
-  render: (
-    id: string,
-    context: {
-      linePrefix: string;
-      lineSuffix: string;
-      hasNewlineBefore: boolean;
-      hasProtectedMarkerOnNextLine: boolean;
-    },
-  ) => { doc: Doc; trimLeadingWhitespace?: boolean; trimFollowingWhitespace?: boolean },
-): Doc {
-  const parts: Doc[] = [];
-  let cursor = 0;
-  let trimFollowingWhitespace = false;
-
-  for (const { id: matchedId, index: matchedIndex } of markerEntries(currentDoc, nodes)) {
-    const lineStart = currentDoc.lastIndexOf("\n", matchedIndex - 1) + 1;
-    const nextNewline = currentDoc.indexOf("\n", matchedIndex + matchedId.length);
-    const lineEnd = nextNewline === -1 ? currentDoc.length : nextNewline;
-    const linePrefix = currentDoc.slice(lineStart, matchedIndex);
-    const lineSuffix = currentDoc.slice(matchedId.length + matchedIndex, lineEnd);
-    const hasNewlineBefore = lineStart > 0;
-    const hasProtectedMarkerOnNextLine = new RegExp(`^\\n${PROTECTED_MARKER_SOURCE}`).test(
-      currentDoc.slice(matchedIndex + matchedId.length),
-    );
-    const rendered = render(matchedId, {
-      linePrefix,
-      lineSuffix,
-      hasNewlineBefore,
-      hasProtectedMarkerOnNextLine,
-    });
-
-    if (matchedIndex > cursor) {
-      const between = currentDoc.slice(cursor, matchedIndex);
-      if (!((rendered.trimLeadingWhitespace || trimFollowingWhitespace) && /^\s*$/.test(between))) {
-        parts.push(between);
-      }
-    }
-
-    parts.push(rendered.doc);
-    trimFollowingWhitespace = Boolean(rendered.trimFollowingWhitespace);
-    cursor = matchedIndex + matchedId.length;
-  }
-
-  if (cursor < currentDoc.length) {
-    parts.push(currentDoc.slice(cursor));
-  }
-  return parts;
-}
-
-function hasHtmlMarkup(content: string): boolean {
-  return /<(?!!--)[A-Za-z/!][^>]*>/.test(content);
-}
-
-function getPreservedSingleLineHtmlSegment(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string,
-): string | undefined {
-  const trimmedSegment = segment.trimEnd();
-  if (trimmedSegment.includes("\n")) {
-    return undefined;
-  }
-
-  const match = trimmedSegment.match(/^<([A-Za-z][^\s/>]*)(?<attrs>[^>]*)>(?<body>[^<]*)<\/\1>$/);
-  if (!match?.groups) {
-    return undefined;
-  }
-
-  const attrAssignments = (match.groups.attrs.match(/=\s*"[^"]*"/g) ?? []).length;
-  if (attrAssignments > 1) {
-    return undefined;
-  }
-
-  const bodyProtectedMarkers = match.groups.body.match(new RegExp(INLINE_MARKER_SOURCE, "g")) ?? [];
-  if (bodyProtectedMarkers.length !== 1 || match.groups.body.trim() !== bodyProtectedMarkers[0]) {
-    return undefined;
-  }
-
-  const segmentNodes = markerEntries(trimmedSegment, node.nodes).map(({ id }) => node.nodes[id]);
-  return segmentNodes.every((entry) => entry.protectedMarkerKind === "inline")
-    ? trimmedSegment
-    : undefined;
-}
-
-function findHtmlTagEnd(content: string, tagStart: number): number | undefined {
-  let quote: '"' | "'" | undefined;
-  for (let cursor = tagStart + 1; cursor < content.length; cursor += 1) {
-    const char = content[cursor];
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      }
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (char === ">") {
-      return cursor;
-    }
-  }
-
-  return undefined;
-}
-
-function isBalancedTopLevelHtml(content: string): boolean {
-  const stack: string[] = [];
-  const rawTextElements = new Set(["script", "style", "template"]);
-  let cursor = 0;
-
-  while (cursor < content.length) {
-    if (content.startsWith("<!--", cursor)) {
-      const commentEnd = content.indexOf("-->", cursor + 4);
-      if (commentEnd === -1) {
-        return false;
-      }
-      cursor = commentEnd + 3;
-      continue;
-    }
-
-    const currentRawElement = stack.at(-1);
-    if (currentRawElement && rawTextElements.has(currentRawElement)) {
-      const rawEnd = new RegExp(`</${currentRawElement}\\s*>`, "gi");
-      rawEnd.lastIndex = cursor;
-      const match = rawEnd.exec(content);
-      if (!match) {
-        return false;
-      }
-      stack.pop();
-      cursor = match.index + match[0].length;
-      continue;
-    }
-
-    const tagStart = content.indexOf("<", cursor);
-    if (tagStart === -1) {
-      break;
-    }
-    if (content.startsWith("<!--", tagStart)) {
-      const commentEnd = content.indexOf("-->", tagStart + 4);
-      if (commentEnd === -1) {
-        return false;
-      }
-      cursor = commentEnd + 3;
-      continue;
-    }
-    if (content.startsWith("<!", tagStart) || content.startsWith("<?", tagStart)) {
-      const declarationEnd = content.indexOf(">", tagStart + 2);
-      if (declarationEnd === -1) {
-        return false;
-      }
-      cursor = declarationEnd + 1;
-      continue;
-    }
-
-    const tagEnd = findHtmlTagEnd(content, tagStart);
-    if (tagEnd === undefined) {
-      return false;
-    }
-
-    const tagText = content.slice(tagStart, tagEnd + 1);
-    const tag = tagText.match(/^<\s*(\/?)\s*([A-Za-z][A-Za-z0-9:-]*)/);
-    if (!tag) {
-      cursor = tagStart + 1;
-      continue;
-    }
-
-    const closing = tag[1] === "/";
-    const name = tag[2].toLowerCase();
-    if (closing) {
-      if (stack.at(-1) !== name) {
-        return false;
-      }
-      stack.pop();
-    } else if (!/\/\s*>$/.test(tagText) && !HTML_VOID_ELEMENTS.has(name)) {
-      stack.push(name);
-    }
-    cursor = tagEnd + 1;
-  }
-
-  return stack.length === 0;
-}
-
-function findInlineOnlyStandaloneElements(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string,
-): Array<{ index: number; marker: string; text: string }> {
-  const matches: Array<{ index: number; marker: string; text: string }> = [];
-  const markerPattern = new RegExp(`^(${PROTECTED_MARKER_SOURCE})`);
-  let cursor = 0;
-
-  while (cursor < segment.length) {
-    const tagStart = segment.indexOf("<", cursor);
-    if (tagStart === -1) {
-      break;
-    }
-    if (segment.startsWith("<!--", tagStart)) {
-      const commentEnd = segment.indexOf("-->", tagStart + 4);
-      cursor = commentEnd === -1 ? segment.length : commentEnd + 3;
-      continue;
-    }
-
-    const openEnd = findHtmlTagEnd(segment, tagStart);
-    if (openEnd === undefined) {
-      break;
-    }
-    const openText = segment.slice(tagStart, openEnd + 1);
-    const openTag = openText.match(/^<\s*([A-Za-z][A-Za-z0-9:-]*)/);
-    if (!openTag || /\/\s*>$/.test(openText)) {
-      cursor = openEnd + 1;
-      continue;
-    }
-
-    const markerMatch = segment.slice(openEnd + 1).match(markerPattern);
-    if (!markerMatch) {
-      cursor = openEnd + 1;
-      continue;
-    }
-    const marker = markerMatch[1];
-    const closeStart = openEnd + 1 + marker.length;
-    const closeEnd = findHtmlTagEnd(segment, closeStart);
-    if (closeEnd === undefined) {
-      cursor = openEnd + 1;
-      continue;
-    }
-    const closeText = segment.slice(closeStart, closeEnd + 1);
-    const closeTag = closeText.match(/^<\s*\/\s*([A-Za-z][A-Za-z0-9:-]*)\s*>$/);
-    const child = node.nodes[marker];
-    if (
-      closeTag?.[1].toLowerCase() === openTag[1].toLowerCase() &&
-      child?.type === "template-tag" &&
-      child.role === "standalone" &&
-      isBalancedTopLevelHtml(segment.slice(0, tagStart))
-    ) {
-      matches.push({ index: tagStart, marker, text: segment.slice(tagStart, closeEnd + 1) });
-      cursor = closeEnd + 1;
-      continue;
-    }
-
-    cursor = openEnd + 1;
-  }
-
-  return matches;
-}
-
-function splitTopLevelInlineOnlyStandaloneElements(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segments: string[],
-): string[] {
-  return segments.flatMap((segment) => {
-    const parts: string[] = [];
-    let cursor = 0;
-    let previousPartWasSplitElement = false;
-    for (const match of findInlineOnlyStandaloneElements(node, segment)) {
-      if (match.index > cursor) {
-        const between = segment.slice(cursor, match.index);
-        if (!(previousPartWasSplitElement && /^\s*$/.test(between))) {
-          parts.push(between);
-          previousPartWasSplitElement = false;
-        }
-      }
-      parts.push(match.text);
-      previousPartWasSplitElement = true;
-      cursor = match.index + match.text.length;
-    }
-    if (cursor < segment.length) {
-      const trailing = segment.slice(cursor);
-      if (!(previousPartWasSplitElement && /^\s*$/.test(trailing))) {
-        parts.push(trailing);
-      }
-    }
-    return parts.length > 0 ? parts : [segment];
-  });
-}
-
-function splitAtTemplateTags(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-): string[] {
-  const splitStandaloneTemplateTags = !hasHtmlMarkup(node.content);
-  const splitters = markerEntries(node.content, node.nodes)
-    .map(({ id }) => node.nodes[id])
-    .filter(
-      (entry): entry is TemplateTagNode =>
-        entry.type === "template-tag" &&
-        !entry.inTag &&
-        !entry.inAttribute &&
-        (isBranchTag(entry.keyword) ||
-          ((splitStandaloneTemplateTags || node.content.startsWith(entry.id)) &&
-            entry.role === "standalone" &&
-            entry.protectedMarkerKind === "block")),
-    );
-
-  if (splitters.length === 0) {
-    return [node.content];
-  }
-
-  const pattern = new RegExp(
-    `(${splitters.map((entry) => escapeMarkerForRegExp(entry.id)).join("|")})`,
-  );
-  return node.content.split(pattern).filter(Boolean);
-}
+  return node;
+};
 
 function stripProtectedMarkerContext(value: string): string {
   return value
@@ -370,7 +38,26 @@ function isInlineOnlyChildContext(linePrefix: string, lineSuffix: string): boole
   const cleanPrefix = stripProtectedMarkerContext(linePrefix);
   const cleanSuffix = stripProtectedMarkerContext(lineSuffix);
 
-  return /^\s*<[^/!][^>]*>\s*$/.test(cleanPrefix) && /^\s*<\/[^>]+>\s*$/.test(cleanSuffix);
+  const prefix = cleanPrefix.trim();
+  const suffix = cleanSuffix.trim();
+  const before = scanHtmlHostContexts(prefix).tags;
+  const after = scanHtmlHostContexts(suffix).tags;
+  return (
+    before.length === 1 &&
+    !before[0].closing &&
+    before[0].start === 0 &&
+    before[0].end === prefix.length &&
+    after.length === 1 &&
+    after[0].closing &&
+    after[0].start === 0 &&
+    after[0].end === suffix.length
+  );
+}
+
+function endsWithHtmlClosingTag(value: string): boolean {
+  const text = stripProtectedMarkerContext(value).trimEnd();
+  const tag = scanHtmlHostContexts(text).tags.at(-1);
+  return Boolean(tag?.closing && tag.end === text.length);
 }
 
 function printDocumentFlowNode(
@@ -400,96 +87,7 @@ function printDocumentFlowNode(
   ];
 }
 
-function formatExpression(node: ExpressionNode): string {
-  return `{{ ${node.content.trim()} }}`;
-}
-
-function printExpression(node: ExpressionNode): Doc {
-  const expression = formatExpression(node);
-  if (node.preNewLines > 1) {
-    return builders.group([builders.trim, builders.hardline, expression]);
-  }
-  return expression;
-}
-
-function getExpressionOnlyBlockDoc(block: TemplateBlockNode): Doc | undefined {
-  const lines = block.content.replace(/\r\n/g, "\n").split("\n");
-
-  while (lines[0] !== undefined && /^\s*$/.test(lines[0])) {
-    lines.shift();
-  }
-  while (lines.at(-1) !== undefined && /^\s*$/.test(lines.at(-1)!)) {
-    lines.pop();
-  }
-
-  if (lines.length === 0) {
-    return undefined;
-  }
-
-  const lineDocs: Doc[] = [];
-  let expressionCount = 0;
-
-  for (const line of lines) {
-    if (/^\s*$/.test(line)) {
-      lineDocs.push("");
-      continue;
-    }
-
-    const markerPattern = new RegExp(INLINE_MARKER_SOURCE, "g");
-    const markers = [...line.matchAll(markerPattern)];
-    if (markers.length === 0 || !/^\s*$/.test(line.replace(markerPattern, ""))) {
-      return undefined;
-    }
-
-    const lineDoc: Doc[] = [];
-    let cursor = 0;
-    for (const marker of markers) {
-      const id = marker[0];
-      const expression = block.nodes[id];
-      if (expression?.type !== "expression") {
-        return undefined;
-      }
-
-      lineDoc.push(line.slice(cursor, marker.index), formatExpression(expression));
-      cursor = marker.index + id.length;
-      expressionCount += 1;
-    }
-    lineDoc.push(line.slice(cursor).trimEnd());
-    lineDocs.push(lineDoc);
-  }
-
-  if (expressionCount < 2) {
-    return undefined;
-  }
-
-  return builders.join(builders.hardline, lineDocs);
-}
-
-function getRawBlockText(node: RawBlockNode): string {
-  const args = node.args?.trim();
-  const endArgs = node.endArgs?.trim();
-
-  if (!node.keyword || node.body === undefined) {
-    return node.originalText;
-  }
-
-  if (node.keyword === "verbatim" && args) {
-    // Normalizing significant inner whitespace could make an earlier raw terminator match next pass.
-    const openingEnd = node.originalText.indexOf("%}");
-    const openingContent = node.originalText.slice(2, openingEnd).trim();
-    if (openingContent !== `verbatim ${args}`) {
-      return node.originalText;
-    }
-  }
-
-  return `{% ${node.keyword}${args ? ` ${args}` : ""} %}${node.body}{% end${node.keyword}${endArgs ? ` ${endArgs}` : ""} %}`;
-}
-
-function printRawBlock(node: RawBlockNode): Doc {
-  return getRawBlockText(node);
-}
-
-function printTemplateTag(node: TemplateTagNode): Doc {
+function printTemplateTag(node: TemplateTagNode, htmlOwnsSpacing = false): Doc {
   const templateTag = `{% ${node.content.trim()} %}`;
 
   if (getStartTagFormatting(node.keyword) === "trim-leading") {
@@ -499,17 +97,18 @@ function printTemplateTag(node: TemplateTagNode): Doc {
   if (
     isBranchTag(node.keyword) &&
     node.parentBlockRelationship === "content" &&
-    !node.parentBlockInTag &&
-    !node.parentBlockInAttribute
+    node.parentBlockContext?.host === "document-flow"
   ) {
     return [builders.dedent(builders.hardline), templateTag, builders.hardline];
   }
 
-  if (node.preNewLines > 1) {
+  if (node.preNewLines > 1 && !htmlOwnsSpacing) {
     const hasParentBlock = node.parentBlockRelationship !== undefined;
     const standaloneNeedsSpacing =
       node.role === "standalone" &&
-      (node.protectedMarkerKind !== "block" || !hasParentBlock || !node.parentBlockHasHtmlMarkup);
+      (node.protectedMarkerKind !== "block" ||
+        !hasParentBlock ||
+        !node.parentBlockContext?.hasHtmlMarkup);
     if (standaloneNeedsSpacing) {
       return builders.group([builders.trim, builders.hardline, templateTag]);
     }
@@ -518,257 +117,16 @@ function printTemplateTag(node: TemplateTagNode): Doc {
   return templateTag;
 }
 
-function isSingleElementStandaloneTag(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string,
-): boolean {
-  const preserved = segment.trimEnd();
-  if (preserved.includes("\n")) {
-    return false;
-  }
-
-  const [match] = findInlineOnlyStandaloneElements(node, preserved);
-  return Boolean(match && match.index === 0 && match.text === preserved);
-}
-
-function getWhitespaceSensitiveInlineElementDoc(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string,
-): Doc | undefined {
-  const preserved = segment.trimEnd();
-  if (preserved.includes("\n") || preserved.includes("\r")) {
-    return undefined;
-  }
-
-  const match = preserved.match(/^<([A-Za-z][^\s/>]*)(?:[^>]*)>([\s\S]*)<\/\1>$/);
-  if (!match || BLOCK_FLOW_ELEMENTS.has(match[1].toLowerCase())) {
-    return undefined;
-  }
-
-  const entries = markerEntries(preserved, node.nodes);
-  const hasUnsafeBlock = entries.some(({ id, index }) => {
-    const child = node.nodes[id];
-    const followingIndex = index + id.length;
-    return (
-      child?.type === "template-block" &&
-      !hasSafeSingleBlockElementBody(child) &&
-      /\S/.test(preserved[followingIndex] ?? "") &&
-      !preserved.startsWith("</", followingIndex)
-    );
+function joinSegments(layout: ContainerPlan, mapped: Doc[]): Doc {
+  return mapped.flatMap((segment, index) => {
+    const boundary = layout.boundaries[index];
+    return [
+      boundary.before === "trim-line" ? builders.trim : "",
+      boundary.before !== "none" ? builders.hardline : "",
+      segment,
+      ...Array.from({ length: boundary.after }, () => builders.hardline),
+    ];
   });
-  if (!hasUnsafeBlock) {
-    return undefined;
-  }
-
-  const parts: Doc[] = [];
-  let cursor = 0;
-  for (const { id, index } of entries) {
-    parts.push(preserved.slice(cursor, index));
-    const child = node.nodes[id];
-    parts.push(child.type === "expression" ? formatExpression(child) : child.originalText);
-    cursor = index + id.length;
-  }
-  parts.push(preserved.slice(cursor));
-  return parts;
-}
-
-function getSingleElementStandaloneTagDoc(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string,
-): Doc | undefined {
-  const preserved = segment.trimEnd();
-  if (preserved.includes("\n")) {
-    return undefined;
-  }
-
-  const [match] = findInlineOnlyStandaloneElements(node, preserved);
-  const child = match ? node.nodes[match.marker] : undefined;
-  if (
-    !match ||
-    match.index !== 0 ||
-    match.text !== preserved ||
-    child?.type !== "template-tag" ||
-    child.protectedMarkerKind !== "block"
-  ) {
-    return undefined;
-  }
-
-  const markerIndex = preserved.indexOf(match.marker);
-  return [
-    preserved.slice(0, markerIndex),
-    printTemplateTag(child),
-    preserved.slice(markerIndex + match.marker.length),
-  ];
-}
-
-function isStandaloneDocumentFlowTemplateTag(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string | undefined,
-): boolean {
-  if (!segment) {
-    return false;
-  }
-
-  const currentNode = node.nodes[segment];
-  return (
-    currentNode?.type === "template-tag" &&
-    currentNode.role === "standalone" &&
-    currentNode.protectedMarkerKind === "block"
-  );
-}
-
-function isTemplateBlockSegment(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string | undefined,
-): boolean {
-  return Boolean(segment && node.nodes[segment]?.type === "template-block");
-}
-
-function segmentHasRenderableText(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segment: string | undefined,
-): boolean {
-  if (!segment) {
-    return false;
-  }
-
-  const content = segment.replace(new RegExp(ANY_MARKER_SOURCE, "g"), (marker) =>
-    node.nodes[marker] ? "" : marker,
-  );
-  return /\S/.test(content);
-}
-
-function splitLeadingStandaloneBlockTag(
-  node: RootNode | { content: string; nodes: Record<string, DjangoNode> },
-): string[] | undefined {
-  const match = node.content.match(new RegExp(`^(${BLOCK_MARKER_SOURCE})`));
-  if (!match) {
-    return undefined;
-  }
-
-  const [firstId] = match;
-  const firstNode = node.nodes[firstId];
-  const rest = node.content.slice(firstId.length);
-  const trimmedRest = rest.trimEnd();
-  const nextMatch = trimmedRest.match(new RegExp(`^(${BLOCK_MARKER_SOURCE})`));
-  if (!nextMatch) {
-    return undefined;
-  }
-
-  const nextNode = node.nodes[nextMatch[1]];
-
-  if (
-    firstNode?.type !== "template-tag" ||
-    firstNode.keyword !== "load" ||
-    firstNode.role !== "standalone" ||
-    firstNode.protectedMarkerKind !== "block" ||
-    nextNode?.type !== "template-block" ||
-    trimmedRest !== nextMatch[1]
-  ) {
-    return undefined;
-  }
-
-  return [firstId, trimmedRest];
-}
-
-function hasLeadingBlankLine(segment: string): boolean {
-  const leadingWhitespace = segment.match(/^\s*/)?.[0] ?? "";
-  return (leadingWhitespace.match(/\n/g) ?? []).length > 1;
-}
-
-function joinSegments(
-  node: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  segments: string[],
-  mapped: Doc[],
-): Doc {
-  const docs: Doc[] = [];
-
-  for (const [index, segment] of segments.entries()) {
-    const previousTrimmedSegment = segments[index - 1]?.trim();
-    const previousTrimmedNode = previousTrimmedSegment
-      ? node.nodes[previousTrimmedSegment]
-      : undefined;
-    const previousIsSingleElement = isSingleElementStandaloneTag(node, segments[index - 1] ?? "");
-    const currentIsSingleElement = isSingleElementStandaloneTag(node, segment);
-    if (
-      index > 0 &&
-      (previousIsSingleElement ||
-        (currentIsSingleElement && previousTrimmedNode?.type !== "template-tag"))
-    ) {
-      docs.push(builders.trim, builders.hardline);
-    } else if (
-      isStandaloneDocumentFlowTemplateTag(node, segment) &&
-      (segmentHasRenderableText(node, segments[index - 1]) ||
-        isTemplateBlockSegment(node, segments[index - 1]))
-    ) {
-      docs.push(builders.hardline);
-    }
-
-    docs.push(mapped[index]);
-
-    const nextSegment = segments[index + 1];
-    if (
-      isStandaloneDocumentFlowTemplateTag(node, segment) &&
-      (segmentHasRenderableText(node, nextSegment) || isTemplateBlockSegment(node, nextSegment))
-    ) {
-      docs.push(builders.hardline);
-      if (segmentHasRenderableText(node, nextSegment) && hasLeadingBlankLine(nextSegment)) {
-        docs.push(builders.hardline);
-      }
-    }
-  }
-
-  return docs;
-}
-
-function splitStartTagAttributes(content: string): string[] {
-  const attributes: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | undefined;
-  let followsQuotedLineBreak = false;
-
-  for (const char of content.replace(/\r\n/g, "\n")) {
-    if (quote) {
-      if (char === "\n") {
-        current = `${current.trimEnd()} `;
-        followsQuotedLineBreak = true;
-        continue;
-      }
-
-      if (followsQuotedLineBreak && /[\t ]/.test(char)) {
-        continue;
-      }
-
-      followsQuotedLineBreak = false;
-      current += char;
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      current += char;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (current) {
-        attributes.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += char;
-  }
-
-  if (current) {
-    attributes.push(current);
-  }
-
-  return attributes;
 }
 
 function getStartTagTemplateBlockDoc(
@@ -778,7 +136,7 @@ function getStartTagTemplateBlockDoc(
 ): Doc {
   const docs: Doc[] = [];
 
-  for (const attribute of splitStartTagAttributes(block.content)) {
+  for (const attribute of splitHtmlAttributes(block.html)) {
     const attributeNode = block.nodes[attribute];
     if (attributeNode?.type === "template-tag" && attributeNode.role === "branch") {
       docs.push(builders.dedent([builders.hardline, path.call(print, "nodes", attribute)]));
@@ -805,112 +163,6 @@ function getStartTagTemplateBlockDoc(
   return docs;
 }
 
-function getCompactSingleElementBlockDoc(block: TemplateBlockNode): Doc | undefined {
-  if (block.originalText.includes("\n") || block.originalText.includes("\r")) {
-    return undefined;
-  }
-
-  const preserved = getPreservedSingleLineHtmlSegment(block, block.content);
-  if (!preserved) {
-    return undefined;
-  }
-
-  const marker = preserved.match(new RegExp(INLINE_MARKER_SOURCE))?.[0];
-  if (!marker || block.nodes[marker]?.type !== "expression") {
-    return undefined;
-  }
-
-  const markerIndex = preserved.indexOf(marker);
-  return [
-    printTemplateTag(block.start),
-    preserved.slice(0, markerIndex),
-    formatExpression(block.nodes[marker] as ExpressionNode),
-    preserved.slice(markerIndex + marker.length),
-    printTemplateTag(block.end),
-  ];
-}
-
-const HTML_VOID_ELEMENTS = new Set([
-  "area",
-  "base",
-  "br",
-  "col",
-  "embed",
-  "hr",
-  "img",
-  "input",
-  "link",
-  "meta",
-  "param",
-  "source",
-  "track",
-  "wbr",
-]);
-
-const BLOCK_FLOW_ELEMENTS = new Set([
-  "address",
-  "article",
-  "aside",
-  "blockquote",
-  "details",
-  "dialog",
-  "div",
-  "dl",
-  "fieldset",
-  "figure",
-  "footer",
-  "form",
-  "header",
-  "hgroup",
-  "main",
-  "menu",
-  "nav",
-  "ol",
-  "section",
-  "table",
-  "ul",
-]);
-
-function hasSafeSingleBlockElementBody(block: TemplateBlockNode): boolean {
-  const match = block.content.match(
-    new RegExp(`^\\s*<([A-Za-z][^\\s/>]*)(?:[^>]*)>\\s*(${INLINE_MARKER_SOURCE})\\s*<\\/\\1>\\s*$`),
-  );
-  if (!match || !BLOCK_FLOW_ELEMENTS.has(match[1].toLowerCase())) {
-    return false;
-  }
-
-  return block.nodes[match[2]]?.type === "expression";
-}
-
-function hasAdjacentInlineExpressionBefore(
-  container: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  previousId: string | undefined,
-): boolean {
-  return previousId ? container.nodes[previousId]?.type === "expression" : false;
-}
-
-function isInsideHtmlElement(content: string, markerIndex: number): boolean {
-  const stack: string[] = [];
-  const tags = content
-    .slice(0, markerIndex)
-    .matchAll(/<\/?([A-Za-z][A-Za-z0-9:-]*)(?:\s[^<>]*?)?\s*\/?>/g);
-
-  for (const tag of tags) {
-    const text = tag[0];
-    const name = tag[1].toLowerCase();
-    if (text.startsWith("</")) {
-      const matchingIndex = stack.lastIndexOf(name);
-      if (matchingIndex !== -1) {
-        stack.length = matchingIndex;
-      }
-    } else if (!text.endsWith("/>") && !HTML_VOID_ELEMENTS.has(name)) {
-      stack.push(name);
-    }
-  }
-
-  return stack.length > 0;
-}
-
 function buildBlock(
   path: AstPath<DjangoNode>,
   print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
@@ -918,15 +170,18 @@ function buildBlock(
   mapped: Doc,
   preserveMappedIndentation = false,
 ): Doc {
-  if (/^\s*$/.test(block.content)) {
+  if (/^\s*$/.test(block.html)) {
     return builders.group([
       path.call(print, "nodes", block.start.id),
-      block.inTag || block.inAttribute ? builders.softline : "",
+      block.hostContext !== "document-flow" ? builders.softline : "",
       path.call(print, "nodes", block.end.id),
     ]);
   }
 
-  if (!block.inAttribute && (!block.inTag || block.containsNewLines)) {
+  if (
+    block.hostContext !== "attribute-value" &&
+    (block.hostContext === "document-flow" || block.containsNewLines)
+  ) {
     return builders.group([
       path.call(print, "nodes", block.start.id),
       preserveMappedIndentation
@@ -952,229 +207,19 @@ export const print: Printer<DjangoNode>["print"] = (path) => {
 
   switch (node.type) {
     case "expression":
-      return printExpression(node);
+      return formatExpression(node);
     case "template-tag":
       return printTemplateTag(node);
     case "comment":
-      return node.originalText;
+      return `{# ${node.content.trim()} #}`;
     case "raw-block":
-      return printRawBlock(node);
+      return getRawBlockText(node);
     case "ignore-region":
-      return node.originalText;
+      return node.sourceText;
     default:
-      return node.originalText;
+      return node.sourceText;
   }
 };
-
-function isStandaloneBlockLikeNode(
-  node: DjangoNode | undefined,
-): node is TemplateTagNode | TemplateBlockNode {
-  if (!node) {
-    return false;
-  }
-
-  if (node.type === "template-tag") {
-    return node.role === "standalone" && node.protectedMarkerKind === "block";
-  }
-
-  return node.type === "template-block" && node.protectedMarkerKind === "block";
-}
-
-function getStandaloneLeadingSpacing(
-  container: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  currentNode: DjangoNode,
-  previousId: string | undefined,
-  containerHasHtmlMarkup: boolean,
-): Doc | undefined {
-  if (!isStandaloneBlockLikeNode(currentNode)) {
-    return undefined;
-  }
-
-  const previousNode = previousId ? container.nodes[previousId] : undefined;
-
-  if (containerHasHtmlMarkup) {
-    return undefined;
-  }
-
-  if (!isStandaloneBlockLikeNode(previousNode)) {
-    return undefined;
-  }
-
-  if (previousNode.type === "template-block") {
-    return undefined;
-  }
-
-  if (currentNode.preNewLines > 1) {
-    return [builders.hardline, builders.hardline];
-  }
-
-  if (currentNode.preNewLines === 1) {
-    return builders.hardline;
-  }
-
-  return previousNode.type === "template-tag" && previousNode.keyword === "extends"
-    ? builders.hardline
-    : undefined;
-}
-
-function shouldInlineWithFollowingProtectedMarker(
-  container: TemplateBlockNode | { content: string; nodes: Record<string, DjangoNode> },
-  currentNode: DjangoNode,
-  nextId: string | undefined,
-  gapAfter: string | undefined,
-): boolean {
-  if (
-    currentNode.type !== "template-tag" ||
-    currentNode.role !== "standalone" ||
-    currentNode.protectedMarkerKind !== "block"
-  ) {
-    return false;
-  }
-
-  const nextNode = nextId ? container.nodes[nextId] : undefined;
-
-  return (
-    Boolean(gapAfter) &&
-    nextNode?.type === "template-tag" &&
-    nextNode.role === "standalone" &&
-    nextNode.protectedMarkerKind === "block"
-  );
-}
-
-function getInlineProtectedMarkerPairs(content: string): Set<string> {
-  const pairs = new Set<string>();
-  for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
-    const protectedMarkers = line.match(new RegExp(PROTECTED_MARKER_SOURCE, "g")) ?? [];
-    if (protectedMarkers.length < 2 || !/[ \t]/.test(line)) {
-      continue;
-    }
-    for (let index = 0; index < protectedMarkers.length - 1; index += 1) {
-      pairs.add(`${protectedMarkers[index]}\0${protectedMarkers[index + 1]}`);
-    }
-  }
-  return pairs;
-}
-
-function restoreInlineProtectedMarkerRuns(currentDoc: string, pairs: Set<string>): string {
-  const markers = [...currentDoc.matchAll(new RegExp(PROTECTED_MARKER_SOURCE, "g"))];
-  const parts: string[] = [];
-  let cursor = 0;
-
-  for (let index = 0; index < markers.length - 1; index += 1) {
-    const left = markers[index];
-    const right = markers[index + 1];
-    const gapStart = left.index + left[0].length;
-    const gap = currentDoc.slice(gapStart, right.index);
-    if (!/^\s*\n\s*$/.test(gap) || !pairs.has(`${left[0]}\0${right[0]}`)) {
-      continue;
-    }
-
-    parts.push(currentDoc.slice(cursor, gapStart), " ");
-    cursor = right.index;
-  }
-
-  parts.push(currentDoc.slice(cursor));
-  return parts.join("");
-}
-
-function isInsideInlineHtmlElement(value: string, offset: number): boolean {
-  const stack: string[] = [];
-  for (const tag of value
-    .slice(0, offset)
-    .matchAll(/<\/?([A-Za-z][A-Za-z0-9:-]*)(?:\s[^<>]*?)?\s*\/?>/g)) {
-    const text = tag[0];
-    const name = tag[1].toLowerCase();
-    if (text.startsWith("</")) {
-      const matchingIndex = stack.lastIndexOf(name);
-      if (matchingIndex !== -1) {
-        stack.length = matchingIndex;
-      }
-    } else if (!text.endsWith("/>") && !HTML_VOID_ELEMENTS.has(name)) {
-      stack.push(name);
-    }
-  }
-
-  const currentElement = stack.at(-1);
-  return Boolean(currentElement && !BLOCK_FLOW_ELEMENTS.has(currentElement));
-}
-
-// This legacy generic pass handles unrelated document-flow boundaries. Whitespace-sensitive inline
-// flow is built as a Doc above and deliberately excluded from this post-render normalization.
-function normalizeAdjacentDocumentFlowConstructs(value: string): string {
-  const hostContexts = scanHtmlHostContexts(value);
-
-  return value.replace(/%}(?={% )|\}\}(?={% )/g, (boundary, offset: number) => {
-    const nextKeyword = value.slice(offset + boundary.length).match(/^{%\s+(\S+)/)?.[1] ?? "";
-    const isFormattingBoundary =
-      boundary === "}}"
-        ? startsDocumentFlowAfterExpression(nextKeyword)
-        : startsDocumentFlowAfterTag(nextKeyword);
-
-    return !isFormattingBoundary ||
-      hostContexts.at(offset) !== "document-flow" ||
-      !hostContexts.isDocumentFlowNormalizationSafeAt(offset) ||
-      isInsideInlineHtmlElement(value, offset)
-      ? boundary
-      : `${boundary}\n`;
-  });
-}
-
-function normalizeHtmlAroundProtectedMarkers(currentDoc: string): string {
-  return currentDoc
-    .replace(/(<[^/!][^<>]*?)\s*\n\s*>/g, "$1>")
-    .replace(/<\/([^>\s]+)\s*\n\s*>/g, "</$1>")
-    .replace(new RegExp(`(<\\/[^>]+>)(${BLOCK_MARKER_SOURCE})`, "g"), "$1\n$2")
-    .replace(
-      new RegExp(
-        `^(?<indent>\\s*)(?<open><([A-Za-z][^\\s/>]*)(?:[^>]*)>)(?<body>${INLINE_MARKER_SOURCE})(?<close><\\/\\3>)(?<trail>\\s*)$`,
-        "gm",
-      ),
-      (match, indent, open, _tagName, body, close, trail) => {
-        if ((open.match(/\s+\S+=/g) ?? []).length <= 1) {
-          return match;
-        }
-
-        return `${indent}${open}\n${indent}  ${body}\n${indent}${close}${trail}`;
-      },
-    );
-}
-
-function prepareSegmentForHtml(
-  segment: string,
-  markerAllocator: InternalMarkerAllocator,
-): {
-  segment: string;
-  beforeReplacements: Array<{ token: string; value: string }>;
-} {
-  const beforeReplacements: Array<{ token: string; value: string }> = [];
-
-  let prepared = segment.replace(
-    new RegExp(`((${PROTECTED_MARKER_SOURCE})(?:[ \\t]+${PROTECTED_MARKER_SOURCE})+)`, "g"),
-    (run) => {
-      if (containsBlockMarker(run)) {
-        return run;
-      }
-
-      const token = markerAllocator.allocate("temporary-run");
-      beforeReplacements.push({ token, value: run });
-      return token;
-    },
-  );
-
-  prepared = prepared
-    .replace(new RegExp(`(<[A-Za-z][^\\s/>]*)(${ATTRIBUTE_MARKER_SOURCE})`, "g"), "$1 $2")
-    .replace(new RegExp(`(${BLOCK_MARKER_SOURCE})(${BLOCK_MARKER_SOURCE})`, "g"), "$1\n$2")
-    .replace(new RegExp(`(<\\/[^>]+>)(${BLOCK_MARKER_SOURCE})`, "g"), "$1\n$2")
-    .replace(
-      new RegExp(
-        `^(?<open><([A-Za-z][^\\s/>]*)(?:[^>]*)>)(?<body>${INLINE_MARKER_SOURCE})(?<close><\\/\\2>)(?<trail>\\s*)$`,
-      ),
-      (match, open, _tagName, body, close, trail) =>
-        (open.match(/\s+\S+=/g) ?? []).length > 1 ? `${open}\n  ${body}\n${close}${trail}` : match,
-    );
-
-  return { segment: prepared, beforeReplacements };
-}
 
 export const embed: Printer<DjangoNode>["embed"] = () => {
   return async (
@@ -1183,64 +228,31 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
     path: AstPath<DjangoNode>,
     options: Options,
   ): Promise<Doc | undefined> => {
-    const node = path.getNode();
-    if (!node || (node.type !== "root" && node.type !== "template-block")) {
-      return undefined;
+    const ast = path.getNode();
+    if (!ast || (ast.type !== "root" && ast.type !== "template-block")) return undefined;
+    const plan = getDocumentPlan(ast);
+    const layout = plan.containers.get(ast.id)!;
+    const { node, markerContexts, segments, leadingStandaloneSplit } = layout;
+    if (layout.preserved) {
+      return [
+        layout.preserved.text,
+        node.type === "root" && layout.finalNewline ? builders.hardline : "",
+      ];
+    }
+    if (layout.body.kind === "expression-lines") {
+      const body = builders.join(
+        builders.hardline,
+        layout.body.lines.map((line) => [...line]),
+      );
+      return node.type === "template-block"
+        ? buildBlock(path, print, node, body, true)
+        : [body, layout.finalNewline ? builders.hardline : ""];
     }
 
-    const ids = getProtectedMarkerIds(node);
-    const containerHasHtmlMarkup = hasHtmlMarkup(node.content);
-    const inlineProtectedMarkerPairs = getInlineProtectedMarkerPairs(node.content);
-    const sourceMarkerEntries = markerEntries(node.content, node.nodes);
-    const markerContexts = new Map<
-      string,
-      {
-        index: number;
-        previousId?: string;
-        nextId?: string;
-        gapBefore: string;
-        gapAfter?: string;
-      }
-    >();
-    for (const [index, entry] of sourceMarkerEntries.entries()) {
-      const previous = sourceMarkerEntries[index - 1];
-      const next = sourceMarkerEntries[index + 1];
-      let whitespaceStart = entry.index;
-      while (whitespaceStart > 0 && /\s/.test(node.content[whitespaceStart - 1])) {
-        whitespaceStart -= 1;
-      }
-      const gapBefore = node.content.slice(whitespaceStart, entry.index);
-      const previousId =
-        previous?.index + previous?.id.length === whitespaceStart ? previous.id : undefined;
-      const betweenNext = next
-        ? node.content.slice(entry.index + entry.id.length, next.index)
-        : undefined;
-      markerContexts.set(entry.id, {
-        index: entry.index,
-        previousId,
-        nextId: next && /^[ \t]+$/.test(betweenNext ?? "") ? next.id : undefined,
-        gapBefore,
-        gapAfter: next && /^[ \t]+$/.test(betweenNext ?? "") ? betweenNext : undefined,
-      });
-    }
-    if (typeof options.originalText !== "string") {
-      throw new TypeError("Prettier did not provide the complete original source.");
-    }
-    const markerAllocator = new InternalMarkerAllocator(options.originalText);
-    markerAllocator.reserve(ids);
-    if (node.type === "template-block") {
-      const expressionOnlyBlockDoc = getExpressionOnlyBlockDoc(node);
-      if (expressionOnlyBlockDoc) {
-        return buildBlock(path, print, node, expressionOnlyBlockDoc, true);
-      }
-
-      if (node.inTag && !node.inAttribute && node.containsNewLines) {
-        return buildBlock(path, print, node, getStartTagTemplateBlockDoc(path, print, node));
-      }
+    if (node.type === "template-block" && layout.body.kind === "start-tag") {
+      return buildBlock(path, print, node, getStartTagTemplateBlockDoc(path, print, node));
     }
 
-    const leadingStandaloneSplit =
-      node.type === "root" ? splitLeadingStandaloneBlockTag(node) : undefined;
     if (
       leadingStandaloneSplit &&
       node.nodes[leadingStandaloneSplit[1]]?.type === "template-block"
@@ -1253,94 +265,89 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       ];
     }
 
-    const splitSegments = leadingStandaloneSplit ?? splitAtTemplateTags(node);
-    const segments =
-      node.type === "root"
-        ? splitTopLevelInlineOnlyStandaloneElements(node, splitSegments)
-        : splitSegments;
+    if (layout.blockSequence) {
+      const body = builders.join(
+        builders.hardline,
+        layout.blockSequence.map((id) => path.call(print, "nodes", id)),
+      );
+      return node.type === "template-block"
+        ? buildBlock(path, print, node, body)
+        : [body, layout.finalNewline ? builders.hardline : ""];
+    }
+
     const mapped = await Promise.all(
-      segments.map(async (segment) => {
-        const preservedSegment = getPreservedSingleLineHtmlSegment(node, segment);
-        const whitespaceSensitiveInlineDoc = getWhitespaceSensitiveInlineElementDoc(node, segment);
-        const singleElementStandaloneTagDoc = getSingleElementStandaloneTagDoc(node, segment);
-        const preparedSegment = prepareSegmentForHtml(segment, markerAllocator);
+      segments.map(async (segment, segmentIndex) => {
+        const preparedSegment = layout.preparedSegments[segmentIndex];
         const doc = node.nodes[segment]
           ? segment
-          : (whitespaceSensitiveInlineDoc ??
-            singleElementStandaloneTagDoc ??
-            preservedSegment ??
-            (await textToDoc(preparedSegment.segment, {
-              ...options,
-              parser: "html",
-            })));
+          : await htmlDocCaches
+              .get(ast.nodes)!
+              .format(
+                preparedSegment.segment,
+                textToDoc,
+                preparedSegment.sensitiveBody ? "strict" : options.htmlWhitespaceSensitivity,
+              );
 
-        let ignoreDoc = false;
+        if (
+          node.type === "root" &&
+          Object.keys(node.nodes).length === 0 &&
+          preparedSegment.beforeReplacements.length === 0
+        ) {
+          return doc;
+        }
 
         return mapDoc(doc, (currentDoc) => {
+          // A Prettier Doc is a documented union with strings as its only text representation.
+          // oxlint-disable-next-line anti-slop/no-runtime-typeof
           if (typeof currentDoc !== "string") {
             return currentDoc;
           }
 
-          if (currentDoc === "<!-- prettier-ignore -->") {
-            ignoreDoc = true;
-            return currentDoc;
-          }
-
           for (const replacement of preparedSegment.beforeReplacements) {
-            currentDoc = markerAllocator.restore(currentDoc, replacement.token, replacement.value);
+            currentDoc = currentDoc.replaceAll(replacement.token, () => replacement.value);
           }
 
           const currentString = currentDoc;
           if (!containsProtectedNodeMarker(currentString, node.nodes)) {
-            ignoreDoc = false;
             return currentDoc;
           }
 
-          currentDoc = normalizeHtmlAroundProtectedMarkers(
-            restoreInlineProtectedMarkerRuns(currentDoc, inlineProtectedMarkerPairs),
-          );
-
           return replaceProtectedMarkersInString(currentDoc, node.nodes, (id, context) => {
             const currentNode = node.nodes[id];
+            const preserved = plan.preserved.get(id);
             const markerContext = markerContexts.get(id);
-            const sourceMarkerIndex = markerContext?.index ?? -1;
-            if (ignoreDoc) {
-              return { doc: currentNode.originalText };
+            if (preserved && !markerContext?.leadingLines) return { doc: preserved.text };
+            // This construct is the entire element body, not a document-flow boundary.
+            if (id === preparedSegment.standaloneMarker && currentNode.type === "template-tag") {
+              return { doc: printTemplateTag(currentNode) };
             }
 
-            const followsInlineExpressionInElement =
-              currentNode.type === "template-block" &&
-              hasSafeSingleBlockElementBody(currentNode) &&
-              hasAdjacentInlineExpressionBefore(node, markerContext?.previousId) &&
-              isInsideHtmlElement(node.content, sourceMarkerIndex);
-            const compactNestedBlock = followsInlineExpressionInElement
-              ? getCompactSingleElementBlockDoc(currentNode)
+            // HTML already preserves blank lines around block markers. Only tags
+            // printed outside that HTML Doc need to supply their own spacing.
+            const rendered = preserved
+              ? preserved.text
+              : currentNode.type === "template-tag" &&
+                  currentNode.protectedMarkerKind === "block" &&
+                  segment !== id
+                ? printTemplateTag(currentNode, true)
+                : path.call(print, "nodes", id);
+            const leadingSpacing = markerContext?.leadingLines
+              ? Array.from({ length: markerContext.leadingLines }, () => builders.hardline)
               : undefined;
-            const rendered = compactNestedBlock ?? path.call(print, "nodes", id);
-            const leadingSpacing = getStandaloneLeadingSpacing(
-              node,
-              currentNode,
-              markerContext?.previousId,
-              containerHasHtmlMarkup,
-            );
-            const sourceGapBefore = markerContext?.gapBefore;
-            const restored =
-              followsInlineExpressionInElement && !sourceGapBefore?.includes("\n")
-                ? [builders.trim, builders.hardline, rendered]
-                : leadingSpacing
-                  ? [builders.trim, leadingSpacing, rendered]
-                  : rendered;
+            const restored = markerContext?.breakBefore
+              ? [builders.trim, builders.hardline, rendered]
+              : leadingSpacing
+                ? [builders.trim, leadingSpacing, rendered]
+                : rendered;
+            if (preserved) {
+              return { doc: restored, trimLeadingWhitespace: Boolean(leadingSpacing) };
+            }
             if (
               currentNode.type === "template-tag" &&
               currentNode.role === "standalone" &&
               currentNode.protectedMarkerKind === "block"
             ) {
-              const inlineWithNext = shouldInlineWithFollowingProtectedMarker(
-                node,
-                currentNode,
-                markerContext?.nextId,
-                markerContext?.gapAfter,
-              );
+              const inlineWithNext = markerContext?.inlineWithNext ?? false;
               return {
                 doc: [
                   printDocumentFlowNode(
@@ -1359,7 +366,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
 
             if (
               currentNode.type === "template-block" &&
-              /<\/[^>]+>\s*$/.test(stripProtectedMarkerContext(context.linePrefix))
+              endsWithHtmlClosingTag(context.linePrefix)
             ) {
               return {
                 doc: printDocumentFlowNode(restored, context.linePrefix, context.lineSuffix),
@@ -1379,59 +386,17 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
       }),
     );
 
-    const joined = joinSegments(node, segments, mapped);
+    const joined = joinSegments(layout, mapped);
 
     if (node.type === "template-block") {
       return buildBlock(path, print, node, joined);
     }
 
-    const endingPreservedNode = Object.values(node.nodes).find((child) => {
-      if (child.type !== "raw-block" && child.type !== "ignore-region") {
-        return false;
-      }
-
-      const markerIndex = node.content.lastIndexOf(child.id);
-      return markerIndex !== -1 && /^\s*$/.test(node.content.slice(markerIndex + child.id.length));
-    });
-    const endsWithUnclosedIgnoreRegion =
-      endingPreservedNode?.type === "ignore-region" && !endingPreservedNode.closed;
-    const endsWithUnclosedPreservedRegion =
-      (endingPreservedNode?.type === "raw-block" && endingPreservedNode.body === undefined) ||
-      endsWithUnclosedIgnoreRegion;
-    const { formatted } = printDocToString(
-      [joined, endsWithUnclosedPreservedRegion ? "" : builders.hardline],
-      options as Parameters<typeof printDocToString>[1],
-    );
-
-    const preservedReplacements: Array<{ token: string; value: string }> = [];
-    let protectedFormatted = formatted;
-    for (const child of Object.values(node.nodes)) {
-      const preservedText =
-        child.type === "raw-block"
-          ? getRawBlockText(child)
-          : child.type === "ignore-region"
-            ? child.originalText
-            : undefined;
-      if (!preservedText || !protectedFormatted.includes(preservedText)) {
-        continue;
-      }
-
-      const token = markerAllocator.allocate("temporary-run");
-      protectedFormatted = protectedFormatted.replace(preservedText, token);
-      preservedReplacements.push({ token, value: preservedText });
-    }
-
-    let normalized = normalizeAdjacentDocumentFlowConstructs(protectedFormatted);
-
-    for (const replacement of preservedReplacements) {
-      normalized = markerAllocator.restore(normalized, replacement.token, replacement.value);
-    }
-
-    return normalized;
+    return [joined, layout.finalNewline ? builders.hardline : ""];
   };
 };
 
-export function getVisitorKeys(ast: DjangoNode | Record<string, DjangoNode>): string[] {
+export function getVisitorKeys(ast: DjangoNode | Readonly<Record<string, DjangoNode>>): string[] {
   if ("type" in ast) {
     return ast.type === "root" ? ["nodes"] : [];
   }

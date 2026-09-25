@@ -1,6 +1,5 @@
 import { format, type Options } from "prettier";
 import { describe, expect, test } from "vitest";
-import type { RootNode } from "../src/ast.js";
 import * as DjangoPlugin from "../src/index.js";
 import { parse } from "../src/parser.js";
 
@@ -8,10 +7,6 @@ const prettierOptions: Options = {
   parser: "django-html",
   plugins: [DjangoPlugin],
 };
-
-async function parseTemplate(source: string): Promise<RootNode> {
-  return await (parse as unknown as (text: string) => RootNode | Promise<RootNode>)(source);
-}
 
 async function expectIdempotent(source: string): Promise<string> {
   const first = await format(source, prettierOptions);
@@ -23,12 +18,12 @@ describe("generated scale coverage", () => {
   test("protects thousands of expressions while retaining source spans", async () => {
     const count = 2_000;
     const source = Array.from({ length: count }, (_, index) => `{{ value_${index} }}`).join(" ");
-    const root = await parseTemplate(source);
+    const root = parse(source);
     const expressions = Object.values(root.nodes).filter((node) => node.type === "expression");
 
     expect(expressions).toHaveLength(count);
-    expect(root.content).not.toContain("{{");
-    expect(root.content.length).toBeLessThan(source.length * 2);
+    expect(root.html).not.toContain("{{");
+    expect(root.html.length).toBeLessThan(source.length * 2);
     expect(expressions[0]).not.toHaveProperty("nodes");
     expect(expressions.at(-1)?.sourceStart).toBe(source.lastIndexOf("{{"));
     expect(source.slice(expressions.at(-1)?.sourceStart, expressions.at(-1)?.sourceEnd)).toBe(
@@ -61,19 +56,39 @@ describe("generated scale coverage", () => {
   test("keeps deep and large malformed inputs deterministic", async () => {
     const depth = 80;
     const nested = `${"{% if value %}".repeat(depth)}{{ value }}${"{% endif %}".repeat(depth)}`;
-    const nestedRoot = await parseTemplate(nested);
+    const nestedRoot = parse(nested);
     expect(
       Object.values(nestedRoot.nodes).filter((node) => node.type === "template-block"),
     ).toHaveLength(depth);
 
     const malformed = `${"{% if value %}\n".repeat(1_000)}{{ tail }}`;
-    const first = await parseTemplate(malformed);
-    const second = await parseTemplate(malformed);
-    expect(first.content).toBe(second.content);
+    const first = parse(malformed);
+    const second = parse(malformed);
+    expect(first.html).toBe(second.html);
     expect(Object.values(first.nodes).filter((node) => node.type === "template-tag")).toHaveLength(
       1_000,
     );
-    expect(first.content).not.toContain("{% if value %}");
+    expect(first.html).not.toContain("{% if value %}");
+  });
+
+  test("tracks newlines across nested blocks without changing source ranges", () => {
+    const depth = 2_000;
+    for (const body of ["x", "\nx", "x\n", "\r", "\u2028", "{# a\nb #}"]) {
+      const source = `\n${"{% if value %}".repeat(depth)}${body}${"{% endif %}".repeat(depth)}\n`;
+      const root = parse(source);
+      const blocks = Object.values(root.nodes).filter((node) => node.type === "template-block");
+      expect(blocks).toHaveLength(depth);
+      for (const block of blocks) {
+        expect(block.containsNewLines).toBe(body.includes("\n"));
+        expect(block.sourceText).toBe(source.slice(block.sourceStart, block.sourceEnd));
+      }
+    }
+    const siblings = parse("{% if a %}\nx{% endif %}{% if b %}y{% endif %}");
+    expect(
+      Object.values(siblings.nodes)
+        .filter((node) => node.type === "template-block")
+        .map((node) => node.containsNewLines),
+    ).toEqual([true, false]);
   });
 
   test("formats marker-heavy attribute values idempotently", async () => {

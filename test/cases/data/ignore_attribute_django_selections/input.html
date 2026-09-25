@@ -1,0 +1,14 @@
+<!-- prettier-ignore-attribute _ data-label -->
+<button   _ = 'on mouseenter
+  {%if enabled%}{%if ready%}add .ready
+  {%else%}remove .ready
+  {%endif%}{%else%}halt{%endif%}' data-label = "{{label}}" title = "{{title}}">go</button>
+<!-- prettier-ignore-attribute -->
+<input   _ = "{%if enabled%}first
+    {{value}}
+  {%else%}second{%endif%}" data-label = '{{label}}' disabled />
+<!-- prettier-ignore -->
+<input   _ = "{%if enabled%}first
+    {{value}}
+  {%endif%}" title = '{{title}}' />
+<div   class = "after">{{tail}}</div>

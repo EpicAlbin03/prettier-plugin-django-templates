@@ -28,30 +28,35 @@ export function findRawBodyEnd(
   name: string,
   openingContent: string,
 ): RawBodyEnd | undefined {
-  let cursor = from;
-
-  while (cursor < source.length) {
-    const tagStart = source.indexOf("{%", cursor);
-    if (tagStart === -1) {
-      return undefined;
+  // Match Django's lexer: a delimiter cannot span LF, including a raw body's terminator.
+  const constructs = /{%[^\n]*?%}|{{[^\n]*?}}|{#[^\n]*?#}/g;
+  constructs.lastIndex = from;
+  let verbatimEnd: string | undefined;
+  for (let match = constructs.exec(source); match; match = constructs.exec(source)) {
+    if (!match[0].startsWith("{%")) {
+      continue;
     }
-
-    const closeDelimiter = source.indexOf("%}", tagStart + 2);
-    if (closeDelimiter === -1) {
-      return undefined;
-    }
-
-    const tagContent = source.slice(tagStart + 2, closeDelimiter).trim();
+    const tagContent = match[0].slice(2, -2).trim();
     const [, ...rest] = tagContent.split(/\s+/);
+    // Verbatim state belongs to Django's lexer, even when the parser is skipping
+    // a comment body. Tokens within it cannot terminate that comment.
+    if (name === "comment") {
+      if (verbatimEnd) {
+        if (tagContent === verbatimEnd) verbatimEnd = undefined;
+        continue;
+      }
+      if (tagContent === "verbatim" || tagContent.startsWith("verbatim ")) {
+        verbatimEnd = `end${tagContent}`;
+        continue;
+      }
+    }
     if (matchesRawBodyEnd(name, openingContent, tagContent)) {
       return {
-        end: closeDelimiter + 2,
-        closingStart: tagStart,
+        end: match.index + match[0].length,
+        closingStart: match.index,
         endArgs: rest.join(" "),
       };
     }
-
-    cursor = closeDelimiter + 2;
   }
 
   return undefined;
@@ -78,7 +83,7 @@ export function findProtectedTemplateRegionEnd(
   }
 
   const openingEnd = source.indexOf("%}", offset + 2);
-  if (openingEnd === -1) {
+  if (openingEnd === -1 || source.slice(offset, openingEnd).includes("\n")) {
     return undefined;
   }
   const openingContent = source.slice(offset + 2, openingEnd).trim();

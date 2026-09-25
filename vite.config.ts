@@ -5,6 +5,18 @@ const externalPrettier = /^prettier($|\/)/;
 export default defineConfig({
   test: {
     include: ["test/**/*.ts"],
+    exclude: ["test/**/*.bench.ts"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.ts"],
+      reporter: ["text", "html", "json", "json-summary"],
+      thresholds: {
+        statements: 98,
+        branches: 95,
+        functions: 100,
+        lines: 98,
+      },
+    },
   },
   staged: {
     "*": "vp check --fix",
@@ -38,7 +50,7 @@ export default defineConfig({
         browser: "src/index.ts",
       },
       format: "esm",
-      dts: false,
+      dts: true,
       deps: {
         neverBundle: [externalPrettier],
       },
@@ -53,10 +65,39 @@ export default defineConfig({
     },
   ],
   lint: {
-    ignorePatterns: ["dist", "test/**/*.html", "pnpm-lock.yaml", "repos", ".agents"],
+    ignorePatterns: [
+      "dist",
+      "test/**/*.html",
+      "pnpm-lock.yaml",
+      "repos",
+      ".agents",
+      "tools/oxlint/anti-slop/**",
+    ],
+    jsPlugins: [{ name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" }],
     options: {
       typeAware: true,
       typeCheck: true,
+    },
+    rules: {
+      "oxc/no-accumulating-spread": "error",
+      "anti-slop/no-array-filter-map": "error",
+      "anti-slop/no-reduce-accumulator-copy": "error",
+      "anti-slop/no-chained-type-assertions": "error",
+      "anti-slop/no-conditional-empty-object-spread": "error",
+      "anti-slop/no-known-value-widening": "error",
+      "anti-slop/no-module-mocking": "error",
+      "anti-slop/no-object-parameters": "error",
+      "anti-slop/no-reflect-apply": "error",
+      "anti-slop/no-reflect-get": "error",
+      "anti-slop/no-runtime-typeof": "error",
+      "anti-slop/no-shape-in-symbol-names": "error",
+      "anti-slop/no-unknown-parameters": "error",
+      "anti-slop/no-unknown-returns": "error",
+      "anti-slop/no-unknown-type-aliases": "error",
+      "anti-slop/no-unsafe-dictionary-type": "error",
+      "anti-slop/no-widen-then-assert": "error",
+      "anti-slop/require-readable-spacing": "off",
+      "anti-slop/require-safety-comment-for-type-assertion": "error",
     },
   },
   fmt: {
@@ -68,6 +109,7 @@ export default defineConfig({
       ".agents",
       "README.md",
       ".changeset",
+      "tools/oxlint/anti-slop/**",
     ],
     useTabs: false,
     printWidth: 100,

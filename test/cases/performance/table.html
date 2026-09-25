@@ -1,0 +1,14 @@
+{% load humanize %}
+<section aria-labelledby="orders-title"><h1 id="orders-title">Recent orders</h1>
+<table class="orders"><caption>{{ orders.count }} orders</caption>
+<thead><tr><th scope="col">Order</th><th scope="col">Customer</th><th scope="col">Total</th><th scope="col">Status</th></tr></thead>
+<tbody>{% for order in orders %}
+<tr class="{% cycle 'odd' 'even' %}" data-order-id="{{ order.pk }}">
+<td><a href="{% url 'orders:detail' order.pk %}">#{{ order.number }}</a></td>
+<td>{{ order.customer.get_full_name|default:order.customer.email }}</td>
+<td>{{ order.total|floatformat:2|intcomma }}</td>
+<td>{% if order.paid %}<strong>Paid</strong>{% elif order.cancelled %}Cancelled{% else %}Pending{% endif %}</td>
+</tr>{% empty %}<tr><td colspan="4">No orders yet.</td></tr>{% endfor %}</tbody>
+</table>
+<nav aria-label="Pagination">{% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page_obj.number }} of {{ paginator.num_pages }}</span>{% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">Next</a>{% endif %}</nav>
+</section>

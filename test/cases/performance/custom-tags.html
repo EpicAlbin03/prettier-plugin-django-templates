@@ -1,0 +1,11 @@
+{% load components navigation %}
+{% breadcrumbs current_page %}
+{% panel title="Project overview" variant="elevated" %}
+<section class="overview"><h2>{{ project.name }}</h2>
+{% avatar user size="large" %}
+{% badge tone="positive" %}<span>{{ project.status }}</span>{% endbadge %}
+<p>{{ project.summary }}</p>
+{% panel title="Team" %}<ul>{% for member in project.members.all %}<li>{% avatar member %}<a href="{{ member.get_absolute_url }}">{{ member.display_name }}</a></li>{% endfor %}</ul>{% endpanel %}
+</section>
+{% endpanel %}
+{% render_menu "project" active=section %}

@@ -1,7 +1,7 @@
 import type { Parser, Printer, SupportLanguage } from "prettier";
 import type { DjangoNode } from "./ast.js";
 import { parse } from "./parser.js";
-import { embed, getVisitorKeys, print } from "./printer.js";
+import { embed, getVisitorKeys, preprocess, print } from "./printer.js";
 
 const PLUGIN_KEY = "django-html";
 
@@ -14,21 +14,22 @@ const languages: SupportLanguage[] = [
   },
 ];
 
-const parsers = {
+const parsers: Record<typeof PLUGIN_KEY, Parser<DjangoNode>> = {
   [PLUGIN_KEY]: {
     astFormat: PLUGIN_KEY,
     parse,
     locStart: (node) => node.sourceStart,
     locEnd: (node) => node.sourceEnd,
-  } as Parser<DjangoNode>,
+  },
 };
 
-const printers = {
+const printers: Record<typeof PLUGIN_KEY, Printer<DjangoNode>> = {
   [PLUGIN_KEY]: {
+    preprocess,
     print,
     embed,
     getVisitorKeys,
-  } as Printer<DjangoNode>,
+  },
 };
 
 const options = {};

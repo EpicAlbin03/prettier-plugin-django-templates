@@ -1,0 +1,12 @@
+{# This template is authored for the benchmark; it contains no production data. #}
+<main>
+<!-- Keep this explanation beside the visible example. -->
+<h1>Template examples</h1>
+{% comment "retired layout" %}
+<section class="old-layout">{{ obsolete.value }}{% if old_flag %}Hidden{% endif %}</section>
+{% endcomment %}
+<p>Welcome, {{ user.first_name }}.</p>
+{% verbatim %}<script type="text/x-template"><div class="client-card">{{ client.title }}<span>{{ client.description }}</span></div></script>{% endverbatim %}
+{# Explain why the fallback is shown. #}
+{% if notice %}<aside role="status">{{ notice }}</aside>{% else %}<p>No new notifications.</p>{% endif %}
+</main>
