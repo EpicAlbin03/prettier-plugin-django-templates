@@ -239,23 +239,18 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
         node.type === "root" && layout.finalNewline ? builders.hardline : "",
       ];
     }
-    if (node.type === "template-block") {
-      if (layout.body.kind === "expression-lines") {
-        return buildBlock(
-          path,
-          print,
-          node,
-          builders.join(
-            builders.hardline,
-            layout.body.lines.map((line) => [...line]),
-          ),
-          true,
-        );
-      }
+    if (layout.body.kind === "expression-lines") {
+      const body = builders.join(
+        builders.hardline,
+        layout.body.lines.map((line) => [...line]),
+      );
+      return node.type === "template-block"
+        ? buildBlock(path, print, node, body, true)
+        : [body, layout.finalNewline ? builders.hardline : ""];
+    }
 
-      if (layout.body.kind === "start-tag") {
-        return buildBlock(path, print, node, getStartTagTemplateBlockDoc(path, print, node));
-      }
+    if (node.type === "template-block" && layout.body.kind === "start-tag") {
+      return buildBlock(path, print, node, getStartTagTemplateBlockDoc(path, print, node));
     }
 
     if (

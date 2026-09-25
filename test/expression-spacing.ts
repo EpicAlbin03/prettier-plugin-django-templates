@@ -9,6 +9,11 @@ const prettify = (code: string) =>
   });
 
 const cases = [
+  ["consecutive expressions at the document root", "{{ first }}\n{{ second }}\n"],
+  [
+    "expression line groups and blank lines at the document root",
+    "{{ first }}{{ second }}\n{{ third }} {{ fourth }}\n\n{{ fifth }}\n",
+  ],
   [
     "a blank line between an include and an expression",
     "{% block test %}\n  {% include 'path' %}\n\n  {{ card }}\n{% endblock test %}\n",
@@ -38,4 +43,47 @@ describe.each([
     expect(output).toBe(expected);
     await expect(prettify(output)).resolves.toBe(expected);
   });
+});
+
+test.each([
+  ["same-line expressions", "{{first}} {{second}}", "{{ first }} {{ second }}\n"],
+  ["adjacent expressions", "{{first}}{{second}}", "{{ first }}{{ second }}\n"],
+  ["same-line spacing", "\n{{first}}    {{second}}\n\n", "{{ first }}    {{ second }}\n"],
+  ["a single expression", "\n{{first}}\n\n", "{{ first }}\n"],
+  [
+    "inline HTML content",
+    "<p>Hello {{name}} {{surname}}!</p>",
+    "<p>Hello {{ name }} {{ surname }}!</p>\n",
+  ],
+  [
+    "multiline prose containing expressions",
+    "Hello {{name}}\nand {{friend}}!\n",
+    "Hello {{ name }} and {{ friend }}!\n",
+  ],
+])("preserves ordinary HTML formatting for %s", async (_description, source, expected) => {
+  const output = await prettify(source);
+  expect(output).toBe(expected);
+  await expect(prettify(output)).resolves.toBe(expected);
+});
+
+test("same-line expressions stay together even at narrow print widths", async () => {
+  const source = "{{ a }} {{ b }}\n";
+  const expected = "{{ a }} {{ b }}\n";
+  const options = { parser: "django-html", plugins: [DjangoPlugin], printWidth: 8 };
+  const output = await format(source, options);
+  expect(output).toBe(expected);
+  await expect(format(output, options)).resolves.toBe(expected);
+});
+
+test("expression-only document lines respect the configured line endings", async () => {
+  const source = "{{first}}\n{{second}}\n";
+  const expected = "{{ first }}\r\n{{ second }}\r\n";
+  const options = {
+    parser: "django-html",
+    plugins: [DjangoPlugin],
+    endOfLine: "crlf" as const,
+  };
+  const output = await format(source, options);
+  expect(output).toBe(expected);
+  await expect(format(output, options)).resolves.toBe(expected);
 });

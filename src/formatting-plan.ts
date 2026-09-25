@@ -12,7 +12,7 @@ import {
   type HtmlHostContextIndex,
 } from "./html-host-context.js";
 import {
-  getExpressionOnlyBlockLines,
+  getExpressionOnlyLines,
   getInlineBlockText,
   getTranslationBlockText,
 } from "./template-text.js";
@@ -903,8 +903,7 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       (endingNode?.type === "ignore-region" && !endingNode.closed) ||
       (endingNode?.type === "raw-block" && endingNode.body === undefined);
     const preservedSpan = preserved.get(node.id);
-    const expressionLines =
-      node.type === "template-block" ? getExpressionOnlyBlockLines(node) : undefined;
+    const expressionLines = getExpressionOnlyLines(node);
     const body: ContainerPlan["body"] = expressionLines
       ? { kind: "expression-lines", lines: expressionLines }
       : {

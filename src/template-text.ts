@@ -1,12 +1,18 @@
-import type { DjangoNode, ExpressionNode, RawBlockNode, TemplateBlockNode } from "./ast.js";
+import type {
+  DjangoNode,
+  ExpressionNode,
+  RawBlockNode,
+  RootNode,
+  TemplateBlockNode,
+} from "./ast.js";
 import { INLINE_MARKER_SOURCE } from "./internal-markers.js";
 
 export function formatExpression(node: ExpressionNode): string {
   return `{{ ${node.content.trim()} }}`;
 }
 
-export function getExpressionOnlyBlockLines(block: TemplateBlockNode): string[][] | undefined {
-  const lines = block.html.replace(/\r\n/g, "\n").split("\n");
+export function getExpressionOnlyLines(node: RootNode | TemplateBlockNode): string[][] | undefined {
+  const lines = node.html.replace(/\r\n/g, "\n").split("\n");
 
   while (lines[0] !== undefined && /^\s*$/.test(lines[0])) {
     lines.shift();
@@ -15,7 +21,8 @@ export function getExpressionOnlyBlockLines(block: TemplateBlockNode): string[][
     lines.pop();
   }
 
-  if (lines.length === 0) {
+  // Only override document layout when there are expression lines to preserve.
+  if (lines.length === 0 || (node.type === "root" && lines.length < 2)) {
     return undefined;
   }
 
@@ -38,7 +45,7 @@ export function getExpressionOnlyBlockLines(block: TemplateBlockNode): string[][
     let cursor = 0;
     for (const marker of markers) {
       const id = marker[0];
-      const expression = block.nodes[id];
+      const expression = node.nodes[id];
       if (expression?.type !== "expression") {
         return undefined;
       }
