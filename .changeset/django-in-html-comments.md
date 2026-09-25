@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-parse Django constructs inside HTML comments while limiting conservative formatting preservation to affected comment ranges
+Fixed an issue where Django constructs inside HTML comments were parsed incorrectly or prevented unrelated HTML from being formatted.

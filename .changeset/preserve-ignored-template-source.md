@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-preserve original template block source and literal dollar sequences in ignore and fallback paths instead of leaking or misinterpreting internal markers
+Fixed an issue where ignore directives could target the wrong content or alter ignored template and attribute source, including literal dollar sequences.

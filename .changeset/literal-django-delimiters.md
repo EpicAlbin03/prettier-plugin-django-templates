@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-preserve literal multiline and unclosed django delimiters while recognizing nested one-line constructs
+Fixed an issue where literal, multiline, unclosed, or nested Django constructs and named verbatim blocks could be parsed incorrectly.

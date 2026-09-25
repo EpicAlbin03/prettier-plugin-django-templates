@@ -1,5 +1,5 @@
 ---
-"prettier-plugin-django-templates": patch
+"prettier-plugin-django-templates": minor
 ---
 
-refactor formatting into immutable document plans with shared html analysis and native prettier doc layout
+Refactored formatting into immutable document plans with shared HTML analysis and native Prettier document layout.

@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-preserve translation block bodies to avoid changing gettext lookup keys
+Fixed an issue where translation block bodies could be changed, producing different gettext lookup keys.

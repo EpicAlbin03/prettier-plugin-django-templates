@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-format html around protected template content and honor attribute layout options on the first pass
+Fixed an issue where HTML around protected template content was left unformatted and attribute layout options could be ignored.

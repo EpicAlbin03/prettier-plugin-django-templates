@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-avoid quadratic sibling-block formatting by sharing document marker allocation and indexed html context
+Improved formatting performance by sharing marker allocation and caching HTML analysis across a document.

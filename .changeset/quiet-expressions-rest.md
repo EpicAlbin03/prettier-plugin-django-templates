@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-Fixed an issue where newlines and blank lines around Django expressions next to template tags, blocks, HTML, and comments were not preserved.
+Fixed an issue where line breaks and blank lines around standalone Django expressions, tags, HTML, and comments could be lost or duplicated.

@@ -2,4 +2,4 @@
 "prettier-plugin-django-templates": patch
 ---
 
-honor raw template block semantics inside html attributes and start tags
+Fixed an issue where raw template blocks inside HTML attributes and start tags were formatted instead of preserved.
