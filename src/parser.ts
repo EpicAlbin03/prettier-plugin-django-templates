@@ -1,5 +1,5 @@
 import { protectHtmlComments, type HtmlCommentRange } from "./comment-preservation.js";
-import { scanHtmlHostContexts } from "./html-host-context.js";
+import { isInlineHtmlElement, scanHtmlHostContexts } from "./html-host-context.js";
 import { InternalMarkerAllocator } from "./internal-markers.js";
 import {
   findRawBodyEnd,
@@ -44,6 +44,7 @@ interface TokenBase {
   inAttribute: boolean;
   inTag: boolean;
   inPreformatted: boolean;
+  inInlineFlow: boolean;
 }
 
 interface TextToken extends TokenBase {
@@ -103,7 +104,7 @@ function createTextToken(
   text: string,
   start: number,
   end: number,
-  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted">,
+  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted" | "inInlineFlow">,
 ): TextToken {
   return {
     type: "Text",
@@ -169,7 +170,7 @@ function createTagToken(
   raw: string,
   start: number,
   end: number,
-  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted">,
+  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted" | "inInlineFlow">,
 ): TagToken {
   const content = normalizeTemplateTagContent(raw.slice(2, -2));
   const name = content.split(/\s+/, 1)[0];
@@ -208,6 +209,7 @@ function tokenize(text: string) {
           inAttribute: false,
           inTag: false,
           inPreformatted: false,
+          inInlineFlow: false,
         }),
       ],
       preserveOriginalText: false,
@@ -230,6 +232,11 @@ function tokenize(text: string) {
       inAttribute: hostContext === "attribute-value",
       inTag: hostContext !== "document-flow",
       inPreformatted: hostContext === "document-flow" && hostContexts.isPreformattedAt(cursor),
+      inInlineFlow:
+        hostContext === "document-flow" &&
+        (/^(script|style|title)$/.test(hostContexts.elementAt(cursor) ?? "") ||
+          (isInlineHtmlElement(hostContexts.elementAt(cursor)) &&
+            /\S/.test(text[cursor - 1] ?? ""))),
     };
 
     const ignoreDelimiter = IGNORE_REGION_DELIMITERS.find(({ opener }) =>
@@ -444,7 +451,10 @@ function followsIgnoredRegionOrHtmlComment(tokens: Token[], index: number): bool
 
 function protectedMarkerKindForToken(token: Token, forceBlock = false): ProtectedMarkerKind {
   // Block markers invite HTML layout whitespace even when their source is preserved.
-  if (token.inPreformatted) {
+  if (
+    token.inPreformatted ||
+    (token.inInlineFlow && token.type === "Tag" && token.role === "standalone")
+  ) {
     return "inline";
   }
   if (token.inTag && !token.inAttribute) {
