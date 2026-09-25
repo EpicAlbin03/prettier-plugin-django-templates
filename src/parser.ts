@@ -172,14 +172,14 @@ function createTagToken(
   state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted">,
 ): TagToken {
   const content = normalizeTemplateTagContent(raw.slice(2, -2));
-  const [name = "", ...rest] = content.split(/\s+/);
+  const name = content.split(/\s+/, 1)[0];
 
   return {
     type: "Tag",
     raw,
     content,
     name,
-    args: rest.join(" "),
+    args: content.slice(name.length).trimStart(),
     role: getTagRole(name),
     start,
     end,
