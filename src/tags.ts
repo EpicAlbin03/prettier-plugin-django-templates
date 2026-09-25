@@ -104,7 +104,7 @@ register(["verbatim"], {
 register(["elif"], { role: "branch", parents: ["if"] });
 register(["else"], {
   role: "branch",
-  parents: ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag"],
+  parents: ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag", "switch", "sample"],
 });
 register(["empty"], { role: "branch", parents: ["for"] });
 register(["plural"], { role: "branch", parents: ["blocktranslate", "blocktrans"] });

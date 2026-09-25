@@ -163,7 +163,7 @@ describe("template tag descriptor registry", () => {
 
   test.each([
     ["elif", ["if"]],
-    ["else", ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag"]],
+    ["else", ["if", "for", "ifchanged", "ifequal", "ifnotequal", "flag", "switch", "sample"]],
     ["empty", ["for"]],
     ["plural", ["blocktranslate", "blocktrans"]],
   ])("defines the complete %s parent matrix", (branch, parents) => {
