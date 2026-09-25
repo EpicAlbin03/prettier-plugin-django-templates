@@ -87,7 +87,7 @@ function printDocumentFlowNode(
   ];
 }
 
-function printTemplateTag(node: TemplateTagNode): Doc {
+function printTemplateTag(node: TemplateTagNode, htmlOwnsSpacing = false): Doc {
   const templateTag = `{% ${node.content.trim()} %}`;
 
   if (getStartTagFormatting(node.keyword) === "trim-leading") {
@@ -102,7 +102,7 @@ function printTemplateTag(node: TemplateTagNode): Doc {
     return [builders.dedent(builders.hardline), templateTag, builders.hardline];
   }
 
-  if (node.preNewLines > 1) {
+  if (node.preNewLines > 1 && !htmlOwnsSpacing) {
     const hasParentBlock = node.parentBlockRelationship !== undefined;
     const standaloneNeedsSpacing =
       node.role === "standalone" &&
@@ -322,7 +322,15 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               return { doc: printTemplateTag(currentNode) };
             }
 
-            const rendered = preserved ? preserved.text : path.call(print, "nodes", id);
+            // HTML already preserves blank lines around block markers. Only tags
+            // printed outside that HTML Doc need to supply their own spacing.
+            const rendered = preserved
+              ? preserved.text
+              : currentNode.type === "template-tag" &&
+                  currentNode.protectedMarkerKind === "block" &&
+                  segment !== id
+                ? printTemplateTag(currentNode, true)
+                : path.call(print, "nodes", id);
             const leadingSpacing = markerContext?.leadingLines
               ? Array.from({ length: markerContext.leadingLines }, () => builders.hardline)
               : undefined;
