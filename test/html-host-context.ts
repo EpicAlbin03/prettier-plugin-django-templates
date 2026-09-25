@@ -230,6 +230,26 @@ describe("HTML host context scanner", () => {
     expect(splitHtmlAttributes(source)).toEqual(expected);
   });
 
+  test("attribute source ranges include spacing and skip Django argument quotes", () => {
+    const source = `<div disabled title = "{{ value|default:"a > b" }}" data-x='one\n  {% if x == 'yes' %}two{% endif %}' bare={{value}}></div>`;
+    const { tags } = scanHtmlHostContexts(source);
+    expect(tags[0].attributeRanges.map(({ name }) => name)).toEqual([
+      "disabled",
+      "title",
+      "data-x",
+      "bare",
+    ]);
+    const spellings = tags[0].attributeRanges.map(({ start, end }) => source.slice(start, end));
+    expect(spellings).toEqual([
+      "disabled",
+      'title = "{{ value|default:"a > b" }}"',
+      "data-x='one\n  {% if x == 'yes' %}two{% endif %}'",
+      "bare={{value}}",
+    ]);
+    expect(tags[0].attributes).toEqual(spellings);
+    expect(tags[1].attributeRanges).toEqual([]);
+  });
+
   test("defaults out-of-range offsets to conservative document flow", () => {
     const contexts = scanHtmlHostContexts("<div>");
     expect(contexts.at(-1)).toBe("document-flow");

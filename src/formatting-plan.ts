@@ -724,16 +724,27 @@ function ignoredSourceRanges(source: string, html: HtmlHostContextIndex, ordered
   let nodeIndex = 0;
   let tagIndex = 0;
   for (const comment of html.comments) {
-    if (
-      source.slice(comment.start, comment.end) !== "<!-- prettier-ignore -->" ||
-      (ranges.at(-1)?.end ?? -1) > comment.start
-    )
-      continue;
+    if ((ranges.at(-1)?.end ?? -1) > comment.start) continue;
+    const commentText = source.slice(comment.start, comment.end);
+    // Match Prettier's directive grammar and case-sensitive raw attribute names.
+    const attributeIgnore = commentText
+      .slice(4, -3)
+      .trim()
+      .match(/^prettier-ignore-attribute(?:\s+(.+))?$/s);
+    if (commentText !== "<!-- prettier-ignore -->" && !attributeIgnore) continue;
     while (ordered[nodeIndex] && ordered[nodeIndex].sourceStart < comment.end) nodeIndex += 1;
     while (html.tags[tagIndex] && html.tags[tagIndex].start < comment.end) tagIndex += 1;
     const nextNode = ordered[nodeIndex];
     const nextTag = html.tags[tagIndex];
-    if (nextTag && nextTag.start < (nextNode?.sourceStart ?? source.length)) {
+    if (attributeIgnore) {
+      // Only the immediately preceding comment applies; intervening text,
+      // template constructs, or another comment break the association.
+      if (!nextTag || nextTag.closing || source.slice(comment.end, nextTag.start).trim()) continue;
+      const names = attributeIgnore[1]?.split(/\s+/);
+      for (const attribute of nextTag.attributeRanges) {
+        if (!names || names.includes(attribute.name)) ranges.push(attribute);
+      }
+    } else if (nextTag && nextTag.start < (nextNode?.sourceStart ?? source.length)) {
       ranges.push({ start: nextTag.start, end: elementEnds.get(tagIndex) ?? nextTag.end });
     } else if (nextNode) ranges.push({ start: nextNode.sourceStart, end: nextNode.sourceEnd });
   }

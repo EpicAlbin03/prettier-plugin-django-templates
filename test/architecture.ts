@@ -80,6 +80,7 @@ describe("immutable source and document analysis", () => {
     '<span data-label="<div>">a{%if x%}{{value}}{%else%}b{%endif%}</span>',
     '<!-- prettier-ignore -->{%if x%}<div   class="x">{{value}}</div>{%endif%}<p>{{tail}}</p>',
     '<!-- prettier-ignore --><section>{%if x%}<div   class="x">{{value}}</div>{%endif%}</section><p>{{tail}}</p>',
+    '<!-- prettier-ignore-attribute _ --><input _="{%if x%}{%if y%}a\n  {{value}}{%else%}b{%endif%}{%endif%}" title="{{title}}">',
     "{% blocktranslate %}Hello {% if x %}<b>{{value}}</b>{% endif %}{% endblocktranslate %}",
     "{% if x %}<div>{% else %}</div>{% endif %}<span>{{tail}}</span>",
   ])(

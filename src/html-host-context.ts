@@ -2,6 +2,12 @@ import { findProtectedTemplateRegionEnd } from "./template-regions.js";
 
 export type HtmlHostContext = "document-flow" | "start-tag" | "attribute-value";
 
+export interface HtmlAttribute {
+  readonly name: string;
+  readonly start: number;
+  readonly end: number;
+}
+
 export interface HtmlTag {
   readonly start: number;
   readonly end: number;
@@ -10,6 +16,7 @@ export interface HtmlTag {
   readonly selfClosing: boolean;
   readonly depth: number;
   readonly attributes: readonly string[];
+  readonly attributeRanges: readonly HtmlAttribute[];
 }
 
 export const BLOCK_FLOW_ELEMENTS = new Set([
@@ -255,6 +262,9 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
         const name = tag[2].toLowerCase();
         const closing = tag[1] === "/";
         const selfClosing = /\/\s*>$/.test(tagText) || HTML_VOID_ELEMENTS.has(name);
+        const attributeOffset = tagStart + tag[0].length;
+        const attributeText = tagText.slice(tag[0].length).replace(/\/?\s*>$/, "");
+        const attributeRanges = closing ? [] : scanHtmlAttributes(attributeText, attributeOffset);
         tags.push({
           start: tagStart,
           end: offset + 1,
@@ -262,9 +272,8 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
           closing,
           selfClosing,
           depth: elements.length,
-          attributes: closing
-            ? []
-            : splitHtmlAttributes(tagText.slice(tag[0].length).replace(/\/?\s*>$/, "")),
+          attributes: attributeRanges.map(({ start, end }) => source.slice(start, end)),
+          attributeRanges,
         });
         if (closing) {
           if (elements.at(-1) === name) {
@@ -347,24 +356,49 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
   };
 }
 
-export function splitHtmlAttributes(content: string): string[] {
-  const attributes: string[] = [];
-  const boundaries = /[\s"']/g;
-  let start = 0;
-  for (let match = boundaries.exec(content); match; match = boundaries.exec(content)) {
-    const char = match[0];
-    if (char === '"' || char === "'") {
-      const close = content.indexOf(char, match.index + 1);
-      boundaries.lastIndex = close === -1 ? content.length : close + 1;
-    } else {
-      if (match.index > start) attributes.push(content.slice(start, match.index));
-      start = match.index + 1;
+function scanHtmlAttributes(content: string, sourceOffset: number): HtmlAttribute[] {
+  const attributes: HtmlAttribute[] = [];
+  let cursor = 0;
+  const skipTemplate = () => {
+    const delimiter = protectedConstructEnds.get(content.slice(cursor, cursor + 2));
+    if (!delimiter) return false;
+    const close = content.indexOf(delimiter, cursor + 2);
+    if (close === -1 || content.slice(cursor, close).includes("\n")) return false;
+    cursor = close + delimiter.length;
+    return true;
+  };
+  while (cursor < content.length) {
+    if (/\s/.test(content[cursor])) {
+      cursor += 1;
+      continue;
     }
+    const start = cursor;
+    while (cursor < content.length && !/[\s=]/.test(content[cursor])) {
+      if (!skipTemplate()) cursor += 1;
+    }
+    const name = content.slice(start, cursor);
+    let end = cursor;
+    while (/\s/.test(content[cursor] ?? "")) cursor += 1;
+    if (content[cursor] === "=") {
+      cursor += 1;
+      while (/\s/.test(content[cursor] ?? "")) cursor += 1;
+      const quote =
+        content[cursor] === '"' || content[cursor] === "'" ? content[cursor++] : undefined;
+      while (cursor < content.length) {
+        if (skipTemplate()) continue;
+        if (quote ? content[cursor] === quote : /\s/.test(content[cursor])) break;
+        cursor += 1;
+      }
+      if (quote && content[cursor] === quote) cursor += 1;
+      // Retain malformed suffixes as part of the original attribute spelling.
+      while (cursor < content.length && !/\s/.test(content[cursor])) cursor += 1;
+      end = cursor;
+    }
+    attributes.push({ name, start: sourceOffset + start, end: sourceOffset + end });
   }
-
-  if (start < content.length) {
-    attributes.push(content.slice(start));
-  }
-
   return attributes;
+}
+
+export function splitHtmlAttributes(content: string): string[] {
+  return scanHtmlAttributes(content, 0).map(({ start, end }) => content.slice(start, end));
 }

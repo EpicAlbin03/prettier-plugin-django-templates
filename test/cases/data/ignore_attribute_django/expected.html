@@ -1,0 +1,9 @@
+<!-- prettier-ignore-attribute _ -->
+<input
+  title="{{ label }}"
+  _="on change
+  {%if active%}if me.checked
+    remove .muted from me
+  end{%endif%}"
+/>
+<p class="after">after</p>
