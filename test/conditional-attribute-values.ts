@@ -4,6 +4,30 @@ import * as DjangoPlugin from "../src/index.js";
 
 const options = { parser: "django-html", plugins: [DjangoPlugin] };
 
+test.each(['"', "'"])("retains block body whitespace inside %s attribute values", async (quote) => {
+  for (const body of [
+    "first  command\n\tsecond command\n\n  end ",
+    "\n  {{ first }}\n    {{ second }}\n",
+    "<b   class=literal>text  with  spaces</b>\n  tail",
+  ]) {
+    const value = `{% if enabled %}${body}{% else %}fallback\n  text{% endif %}`;
+    const source = `<div data-code=${quote}${value}${quote}>{{body}}</div>`;
+    const formatted = await format(source, options);
+    expect(formatted).toContain(value);
+    expect(formatted).toContain("{{ body }}");
+    expect(await format(formatted, options)).toBe(formatted);
+  }
+});
+
+test("attribute blocks retain stronger raw and translation body protection", async () => {
+  const source = `<div data-code="{%if enabled%}{% verbatim %}{{untouched}}\n  {%if raw%}{% endverbatim %}{% blocktranslate %}hello  {{name}}\n  world{% endblocktranslate %}{%endif%}"></div>`;
+  const formatted = await format(source, options);
+  expect(formatted).toContain(
+    "{% if enabled %}{% verbatim %}{{untouched}}\n  {%if raw%}{% endverbatim %}{% blocktranslate %}hello  {{name}}\n  world{% endblocktranslate %}{% endif %}",
+  );
+  expect(await format(formatted, options)).toBe(formatted);
+});
+
 test.each(['"', "'"])(
   "retains literal whitespace inside %s conditional attributes",
   async (quote) => {

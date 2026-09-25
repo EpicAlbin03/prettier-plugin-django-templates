@@ -34,7 +34,7 @@ The printer's `preprocess` hook calls `analyzeDocument` **before** Prettier coll
 - synthetic protected ranges in a separate projection dictionary;
 - container body modes, prepared HTML segments, marker spacing instructions, segment separators, and EOF policy.
 
-Ignore, inline, translation, and conditional-HTML preservation are decided here. Opaque ancestors suppress descendant embeds regardless of traversal order. Generated markers never become children of the parsed AST. The allocator is local to analysis; printing cannot allocate markers or change preservation decisions.
+Ignore, inline, attribute-value, translation, and conditional-HTML preservation are decided here. Attribute-ignore directives use source ranges from the shared HTML scanner. Attribute-value blocks preserve literal text and whitespace while normalizing Django tokens; their bodies are never formatted as detached HTML fragments. Explicit ignores retain original token spelling too. Opaque ancestors suppress descendant embeds regardless of traversal order. Generated markers never become children of the parsed AST. The allocator is local to analysis; printing cannot allocate markers or change preservation decisions.
 
 Plans are retained in a weak map keyed by the parsed document's dictionary, so unrelated formatting calls cannot share allocation state. `analyzeDocument` can also be called directly to test deterministic planning against a frozen AST.
 

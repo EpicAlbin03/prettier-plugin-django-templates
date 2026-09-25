@@ -78,6 +78,7 @@ describe("immutable source and document analysis", () => {
   test.each([
     "{% if wrap %}<pre>{% endif %}  {{value}}\n{% if wrap %}</pre>{% endif %}<div>{{tail}}</div>",
     '<span data-label="<div>">a{%if x%}{{value}}{%else%}b{%endif%}</span>',
+    '<input data-code="{%if x%}{%if y%}a\n  {{value}}{%else%}b{%endif%}\n  c{%endif%}" title="{{title}}">',
     '<!-- prettier-ignore -->{%if x%}<div   class="x">{{value}}</div>{%endif%}<p>{{tail}}</p>',
     '<!-- prettier-ignore --><section>{%if x%}<div   class="x">{{value}}</div>{%endif%}</section><p>{{tail}}</p>',
     '<!-- prettier-ignore-attribute _ --><input _="{%if x%}{%if y%}a\n  {{value}}{%else%}b{%endif%}{%endif%}" title="{{title}}">',
@@ -107,6 +108,22 @@ describe("immutable source and document analysis", () => {
       expect(docs).toHaveLength(2);
     },
   );
+
+  test("attribute-value blocks are opaque before child embeds are collected", () => {
+    const source = '<input data-code="{%if x%}{%if y%}a\n  {{value}}{%endif%}{%endif%}">';
+    const root = parse(source);
+    const plan = analyzeDocument(root);
+    const blocks = [...plan.containers.values()].filter(
+      ({ node }) => node.type === "template-block",
+    );
+    expect(blocks).toHaveLength(2);
+    expect(blocks.every(({ preserved }) => preserved !== undefined)).toBe(true);
+    const outer = blocks.find(({ node }) => node.sourceText.startsWith("{%if x%}"))!;
+    expect(outer.preserved?.reason).toBe("attribute-value");
+    expect(outer.preserved?.text).toBe(
+      "{% if x %}{% if y %}a\n  {{ value }}{% endif %}{% endif %}",
+    );
+  });
 
   test("conditional preservation is an explicit plan-owned span, not a synthetic AST child", () => {
     const source =

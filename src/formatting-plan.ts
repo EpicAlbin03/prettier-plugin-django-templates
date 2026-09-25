@@ -681,7 +681,13 @@ export interface PreservedSpan {
   readonly sourceStart: number;
   readonly sourceEnd: number;
   readonly text: string;
-  readonly reason: "source" | "translation" | "inline" | "conditional-html" | "ignore";
+  readonly reason:
+    | "source"
+    | "translation"
+    | "inline"
+    | "attribute-value"
+    | "conditional-html"
+    | "ignore";
 }
 
 interface MarkerContext {
@@ -824,7 +830,11 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
     } else {
       const translation = getTranslationBlockText(node);
       if (translation !== undefined) preserve(node, translation, "translation");
-      else if (
+      else if (node.type === "template-block" && node.hostContext === "attribute-value") {
+        // Attribute text belongs to its host value, not to a detached HTML fragment.
+        // Normalize Django tokens without collapsing or rewrapping literal whitespace.
+        preserve(node, getInlineBlockText(node), "attribute-value");
+      } else if (
         node.type === "template-block" &&
         node.hostContext === "document-flow" &&
         isInlineHtmlElement(sourceContexts.elementAt(node.sourceStart)) &&
