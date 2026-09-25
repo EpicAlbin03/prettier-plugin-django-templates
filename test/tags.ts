@@ -23,6 +23,45 @@ const formatTemplate = (source: string) =>
 
 const descriptors = getTagDescriptors();
 
+test("comment blocks only close on the exact endcomment token", async () => {
+  const source = "{% comment %}{% endcomment note %}ignored{% endcomment %}";
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
+
+test("comment terminator scanning respects the Django lexer's verbatim state", async () => {
+  const source = "{% comment %}{% verbatim %}{% endcomment %}{% endverbatim %}{% endcomment %}";
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
+
+test.each(["component", "slot"])(
+  "accepts a self-closing django-components %s tag inside another block",
+  async (tag) => {
+    const source = `{% if x %}{% ${tag} "card" / %}{% endif %}`;
+    const output = await formatTemplate(source);
+    expect(output).toBe(`{% if x %}\n  {% ${tag} "card" / %}\n{% endif %}\n`);
+    expect(await formatTemplate(output)).toBe(output);
+  },
+);
+
+test("treats a CMS placeholder without 'or' as standalone", async () => {
+  const source = '{% if x %}{% placeholder "content" %}{% endif %}';
+  const output = await formatTemplate(source);
+  expect(output).toBe('{% if x %}\n  {% placeholder "content" %}\n{% endif %}\n');
+  expect(await formatTemplate(output)).toBe(output);
+});
+
+test.each(["switch", "sample"])("accepts else inside django-waffle %s", async (tag) => {
+  const source = `{% ${tag} "feature" %}yes{% else %}no{% end${tag} %}`;
+  const output = await formatTemplate(source);
+  expect(output).toBe(`{% ${tag} "feature" %}\n  yes\n{% else %}\n  no\n{% end${tag} %}\n`);
+  expect(await formatTemplate(output)).toBe(output);
+});
+
+test("comment tag notes retain quoted whitespace", async () => {
+  const source = '{% comment "keep  these  spaces" %}hidden{% endcomment %}';
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
+
 describe("template tag descriptor registry", () => {
   test("classifies every descriptor through its authoritative role", () => {
     for (const [name, descriptor] of descriptors) {

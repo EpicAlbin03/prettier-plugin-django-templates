@@ -4,6 +4,30 @@ import * as DjangoPlugin from "../src/index.js";
 
 const options = { parser: "django-html", plugins: [DjangoPlugin] };
 
+const formatTemplate = (source: string) => format(source, options);
+
+test.each([
+  "a{% if x %}b{% endif %}c",
+  "<div>a{% if x %}b{% endif %}c</div>",
+  "<div>{% for x in xs %}{{ x }},{% endfor %}</div>",
+])("does not introduce spaces into rendered block text: %s", async (source) => {
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
+
+test("whitespace-only blocks retain their literal body", async () => {
+  const source = "<div>one{% if x %} {% endif %}two</div>";
+  // With x=true this must still render 'one two', not 'onetwo'.
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
+
+test.each(["{{ value }}", "{# hidden #}"])(
+  "multiple HTML attributes preserve adjacency around %s",
+  async (body) => {
+    const source = `<span class="a" title="b">${body}</span>`;
+    await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+  },
+);
+
 test.each([
   "<span>a{% if x %}b{% endif %}</span>",
   "<span>{% if x %}a{% else %}b{% endif %}</span>",

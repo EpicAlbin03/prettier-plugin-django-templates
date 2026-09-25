@@ -1,8 +1,26 @@
 import { format } from "prettier";
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import * as DjangoPlugin from "../src/index.js";
 
 const options = { parser: "django-html", plugins: [DjangoPlugin] };
+
+const formatTemplate = (source: string) => format(source, options);
+
+describe("unquoted attribute values", () => {
+  test.each([
+    ["expression", "{{value}}", "{{ value }}"],
+    ["interpolated text", "pre{{value}}post", "pre{{ value }}post"],
+    [
+      "conditional value",
+      "{% if x %}yes{% else %}no{% endif %}",
+      "{% if x %}yes{% else %}no{% endif %}",
+    ],
+  ])("retains the %s instead of leaking attribute markers", async (_name, value, expected) => {
+    await expect(formatTemplate(`<div data-x=${value}></div>`)).resolves.toBe(
+      `<div data-x="${expected}"></div>\n`,
+    );
+  });
+});
 
 test.each(['"', "'"])("retains block body whitespace inside %s attribute values", async (quote) => {
   for (const body of [

@@ -5,6 +5,15 @@ import * as DjangoPlugin from "../src/index.js";
 const formatTemplate = (source: string) =>
   format(source, { parser: "django-html", plugins: [DjangoPlugin] });
 
+test("preserves a conditional attribute adjacent to the element name", async () => {
+  const output = await formatTemplate("<input{% if x %} disabled{% endif %}>");
+  expect(output).toContain("{% if x %}");
+  expect(output).toContain("disabled");
+  expect(output).toContain("{% endif %}");
+  expect(output).not.toMatch(/dj\d+/);
+  expect(await formatTemplate(output)).toBe(output);
+});
+
 test("formats an empty template block inside an HTML start tag", async () => {
   const source = "<input {%if enabled%}{%endif%}>";
   const expected = "<input {% if enabled %}{% endif %} />\n";

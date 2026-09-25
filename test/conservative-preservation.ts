@@ -5,6 +5,14 @@ import * as DjangoPlugin from "../src/index.js";
 const formatTemplate = (source: string) =>
   format(source, { parser: "django-html", plugins: [DjangoPlugin] });
 
+test.each(["pre", "textarea"])(
+  "preserves original token spelling inside <%s> nested in a template element",
+  async (tag) => {
+    const body = `<${tag}>{{value}}</${tag}>`;
+    await expect(formatTemplate(`<template>${body}</template>`)).resolves.toContain(body);
+  },
+);
+
 test.each([
   [
     "an unclosed conditional preformatted wrapper",
