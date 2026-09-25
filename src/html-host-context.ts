@@ -62,7 +62,7 @@ export function isInlineHtmlElement(name: string | undefined): boolean {
   return Boolean(name && !BLOCK_FLOW_ELEMENTS.has(name));
 }
 
-type RawTextElement = "script" | "style" | "textarea" | "title" | "template";
+type RawTextElement = "script" | "style" | "textarea" | "title";
 
 export interface HtmlHostContextIndex {
   readonly tags: readonly HtmlTag[];
@@ -286,16 +286,13 @@ export function scanHtmlHostContexts(source: string): HtmlHostContextIndex {
         }
         elementChanges.push({ offset: offset + 1, name: elements.at(-1) });
       }
-      const openingRawTextTag = tagText.match(
-        /^<\s*(script|style|textarea|title|template)(?=[\s/>])/i,
-      )?.[1];
+      const openingRawTextTag = tagText.match(/^<\s*(script|style|textarea|title)(?=[\s/>])/i)?.[1];
       const normalizedRawTextTag = openingRawTextTag?.toLowerCase();
       if (
         (normalizedRawTextTag === "script" ||
           normalizedRawTextTag === "style" ||
           normalizedRawTextTag === "textarea" ||
-          normalizedRawTextTag === "title" ||
-          normalizedRawTextTag === "template") &&
+          normalizedRawTextTag === "title") &&
         !/\/\s*>$/.test(tagText)
       ) {
         rawTextElement = normalizedRawTextTag;
