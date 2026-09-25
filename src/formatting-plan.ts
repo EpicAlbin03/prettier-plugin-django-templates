@@ -522,7 +522,7 @@ function adaptHtmlProjection(node: Container, html: string): string {
     closing.closing &&
     opening.name === closing.name &&
     !html.slice(closing.end).trim() &&
-    !/^(pre|textarea)$/.test(opening.name) &&
+    BLOCK_FLOW_ELEMENTS.has(opening.name) &&
     opening.attributes.filter((attribute) => attribute.includes("=")).length > 1 &&
     new RegExp(`^${INLINE_MARKER_SOURCE}$`).test(html.slice(opening.end, closing.start))
   ) {
