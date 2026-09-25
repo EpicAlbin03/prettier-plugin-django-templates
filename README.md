@@ -101,6 +101,13 @@ Or using template comments:
 {# prettier-ignore-end #}
 ```
 
+To preserve a specific attribute exactly as written, place an attribute ignore directive immediately before the element:
+
+```html
+<!-- prettier-ignore-attribute data-label -->
+<div data-label = "{{label}}" class="message">{{ message }}</div>
+```
+
 ## Usage in the browser
 
 Import `prettier-plugin-django-templates/browser` from an ESM-aware bundler to get an entry that depends on `prettier/standalone` and does not use Node APIs. The browser entry is intended for bundlers such as Vite. It is not a self-contained bundle and direct no-build CDN or script-tag usage is not supported.
