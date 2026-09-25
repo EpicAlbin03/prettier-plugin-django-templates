@@ -39,8 +39,35 @@ The plugin provides the `django-html` parser for Django HTML templates in `.html
 }
 ```
 
-## Ignore regions
+## Inline element whitespace
 
+Prettier preserves whitespace around inline elements by default, which can produce formatting like this:
+
+```html
+<a href="{% url 'detail' object.pk %}" title="{{ object.title }}"
+  >{{ object.title }}</a
+>
+```
+
+To allow Prettier to normalize the whitespace, set [htmlWhitespaceSensitivity](https://prettier.io/docs/options#html-whitespace-sensitivity) to `ignore`:
+
+```json
+{
+  "htmlWhitespaceSensitivity": "ignore"
+}
+```
+
+The same element will then be formatted as:
+
+```html
+<a href="{% url 'detail' object.pk %}" title="{{ object.title }}">
+  {{ object.title }}
+</a>
+```
+
+This can change how whitespace renders between inline elements.
+
+## Ignore regions
 
 Ignore regions tell the plugin to leave part of a Django HTML template unchanged:
 
