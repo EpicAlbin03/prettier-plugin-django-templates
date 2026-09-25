@@ -1,5 +1,43 @@
 # prettier-plugin-django-templates changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`699bdd6`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/699bdd66a9cbd3cb566d45971127400668547a9c) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Refactored formatting into immutable document plans with shared HTML analysis and native Prettier document layout.
+
+### Patch Changes
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`57ec942`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/57ec9426362b215c0ce22ad9a5f7c2c9bdfe8b02) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where TypeScript could not resolve declarations for the browser entry point.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`4c13f57`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/4c13f57c7d765c3e86f6cfce3f9931c32437dd5a) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where Django constructs inside HTML comments were parsed incorrectly or prevented unrelated HTML from being formatted.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`3d5d285`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/3d5d28511d49b59167c69f9d61ce117475cc2f9f) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where HTML around protected template content was left unformatted and attribute layout options could be ignored.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`f433b49`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/f433b49d74628455734b3992067e5806b3715181) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where literal, multiline, unclosed, or nested Django constructs and named verbatim blocks could be parsed incorrectly.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`4ebda0e`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/4ebda0eb2ed59c8bdce2606f1b80ca0214460814) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where conditional HTML fragments and significant whitespace in quoted or unquoted attribute values could be changed.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`2ce1dbb`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/2ce1dbbc5521134156ac44d75a6f7feca11c8dd1) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where standalone template tags inside CSS, JavaScript, and inline HTML could prevent surrounding content from being formatted correctly.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`03d3c90`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/03d3c905927be67c355cf526f8e5a80585970146) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where ignore directives could target the wrong content or alter ignored template and attribute source, including literal dollar sequences.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`0d363ce`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/0d363ce92cad5c154b2bfb5a318f1aff1b2d2611) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where inline template blocks, branches, comments, and standalone tags could gain or lose rendered whitespace.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`208ae71`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/208ae712345bdd1591844dc55a0f6569e75c19f3) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where significant whitespace in template blocks inside `pre` and `textarea` elements could be changed.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`2ce1dbb`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/2ce1dbbc5521134156ac44d75a6f7feca11c8dd1) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where text-only and whitespace-only template block bodies could gain or lose rendered whitespace.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`34f6c16`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/34f6c169936186d5a2a0895de82e23f7f768505c) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where translation block bodies could be changed, producing different gettext lookup keys.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`8bd0ed2`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/8bd0ed23bedb447733d67edf700019db4919b95d) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where raw template blocks inside HTML attributes and start tags were formatted instead of preserved.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`57ec942`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/57ec9426362b215c0ce22ad9a5f7c2c9bdfe8b02) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where line breaks and blank lines around standalone Django expressions, tags, HTML, and comments could be lost or duplicated.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`2ce1dbb`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/2ce1dbbc5521134156ac44d75a6f7feca11c8dd1) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Fixed an issue where self-closing component and CMS tags and `else` branches in Waffle blocks were treated as unmatched blocks.
+
+- [#17](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/17) [`154f2ab`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/154f2ab11006004d5c849fd14b526d285b8b9e33) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - Improved formatting performance by sharing marker allocation and caching HTML analysis across a document.
+
 ## 0.2.0
 
 ### Minor Changes
