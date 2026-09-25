@@ -175,6 +175,18 @@ function getWhitespaceSensitiveInlineBody(
   return { start: opening.end, end: closing.start };
 }
 
+function isInlineComment(
+  child: DjangoNode | undefined,
+  htmlCommentEnds: ReadonlyMap<number, number>,
+): boolean {
+  return (
+    child?.type === "comment" ||
+    (child?.type === "raw-block" &&
+      child.preserveOriginalText === true &&
+      htmlCommentEnds.get(child.sourceStart) === child.sourceEnd)
+  );
+}
+
 function isStandaloneFlowTag(child: DjangoNode | undefined): boolean {
   return (
     child?.type === "template-tag" &&
@@ -516,6 +528,7 @@ function prepareSegmentForHtml(
   node: RootNode | TemplateBlockNode,
   segment: string,
   markerAllocator: InternalMarkerAllocator,
+  markerContexts: ReadonlyMap<string, MarkerContext>,
 ): PreparedSegment {
   const beforeReplacements: Array<{ token: string; value: string }> = [];
   // Protect only the sensitive body or standalone construct. The surrounding HTML
@@ -542,6 +555,13 @@ function prepareSegmentForHtml(
     protectedSegment =
       segment.slice(0, protectedRange.start) + token + segment.slice(protectedRange.end);
   }
+
+  // Planned inline line breaks own these gaps. Hiding them from HTML prevents
+  // its fill Docs from adding a second line break at narrow print widths.
+  protectedSegment = protectedSegment.replace(
+    new RegExp(`\\s+(${INLINE_MARKER_SOURCE})`, "g"),
+    (gap, id: string) => (markerContexts.get(id)?.leadingLines ? id : gap),
+  );
 
   let prepared = protectedSegment.replace(
     new RegExp(`((${PROTECTED_MARKER_SOURCE})(?:[ \\t]+${PROTECTED_MARKER_SOURCE})+)`, "g"),
@@ -735,6 +755,7 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
   const containers = new Map<string, ContainerPlan>();
   const preserved = new Map<string, PreservedSpan>();
   const sourceContexts = scanHtmlHostContexts(root.sourceText);
+  const htmlCommentEnds = new Map(sourceContexts.comments.map(({ start, end }) => [start, end]));
   const structure = new HtmlStructure();
   const safeInlineBodies = new Map<string, boolean>();
   const safeBody = (node: TemplateBlockNode) => {
@@ -849,12 +870,24 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
               child.protectedMarkerKind !== "block") &&
             startsDocumentFlowAfterTag(keyword));
       const nextNode = next ? nodes[next.id] : undefined;
+      // Template comments and protected HTML comments become inline text markers.
+      // Preserve their line boundaries in document flow, but not inside inline HTML.
+      const childIsComment = isInlineComment(child, htmlCommentEnds);
+      const previousIsComment = isInlineComment(previousNode, htmlCommentEnds);
+      const commentLineBreak =
+        ((childIsComment && (previousNode?.type === "expression" || previousIsComment)) ||
+          (child.type === "expression" && previousIsComment)) &&
+        gapBefore.includes("\n") &&
+        child.hostContext === "document-flow" &&
+        sourceContexts.isDocumentFlowNormalizationSafeAt(child.sourceStart - 1) &&
+        !isInlineHtmlElement(sourceContexts.elementAt(child.sourceStart));
       markerContexts.set(entry.id, {
-        leadingLines:
-          hostContexts.tags.length === 0 &&
-          isStandaloneFlowTag(previousNode) &&
-          (isStandaloneFlowTag(child) ||
-            (child.type === "template-block" && child.protectedMarkerKind === "block"))
+        leadingLines: commentLineBreak
+          ? Math.min(gapBefore.split("\n").length - 1, 2)
+          : hostContexts.tags.length === 0 &&
+              isStandaloneFlowTag(previousNode) &&
+              (isStandaloneFlowTag(child) ||
+                (child.type === "template-block" && child.protectedMarkerKind === "block"))
             ? Math.min(child.preNewLines, 2)
             : 0,
         inlineWithNext:
@@ -920,7 +953,9 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       markerContexts,
       segments,
       boundaries: planSegmentBoundaries(node, segments),
-      preparedSegments: segments.map((segment) => prepareSegmentForHtml(node, segment, allocator)),
+      preparedSegments: segments.map((segment) =>
+        prepareSegmentForHtml(node, segment, allocator, markerContexts),
+      ),
       leadingStandaloneSplit,
       blockSequence,
       preserved: preservedSpan,

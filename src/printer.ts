@@ -315,14 +315,14 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
           return replaceProtectedMarkersInString(currentDoc, node.nodes, (id, context) => {
             const currentNode = node.nodes[id];
             const preserved = plan.preserved.get(id);
-            if (preserved) return { doc: preserved.text };
+            const markerContext = markerContexts.get(id);
+            if (preserved && !markerContext?.leadingLines) return { doc: preserved.text };
             // This construct is the entire element body, not a document-flow boundary.
             if (id === preparedSegment.standaloneMarker && currentNode.type === "template-tag") {
               return { doc: printTemplateTag(currentNode) };
             }
-            const markerContext = markerContexts.get(id);
 
-            const rendered = path.call(print, "nodes", id);
+            const rendered = preserved ? preserved.text : path.call(print, "nodes", id);
             const leadingSpacing = markerContext?.leadingLines
               ? Array.from({ length: markerContext.leadingLines }, () => builders.hardline)
               : undefined;
@@ -331,6 +331,9 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
               : leadingSpacing
                 ? [builders.trim, leadingSpacing, rendered]
                 : rendered;
+            if (preserved) {
+              return { doc: restored, trimLeadingWhitespace: Boolean(leadingSpacing) };
+            }
             if (
               currentNode.type === "template-tag" &&
               currentNode.role === "standalone" &&
