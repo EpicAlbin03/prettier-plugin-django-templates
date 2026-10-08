@@ -957,7 +957,10 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       const childIsComment = isInlineComment(child, htmlCommentEnds);
       const previousIsComment = isInlineComment(previousNode, htmlCommentEnds);
       const commentLineBreak =
-        ((childIsComment && (previousNode?.type === "expression" || previousIsComment)) ||
+        ((childIsComment &&
+          (previousNode?.type === "expression" ||
+            previousIsComment ||
+            isStandaloneFlowTag(previousNode))) ||
           (child.type === "expression" && previousIsComment)) &&
         gapBefore.includes("\n") &&
         child.hostContext === "document-flow" &&
