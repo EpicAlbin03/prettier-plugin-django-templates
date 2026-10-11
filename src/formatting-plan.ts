@@ -15,6 +15,7 @@ import {
   getExpressionOnlyLines,
   getInlineBlockText,
   getTranslationBlockText,
+  isUnclosedRawBlock,
 } from "./template-text.js";
 import {
   ANY_MARKER_SOURCE,
@@ -33,12 +34,15 @@ import {
   startsDocumentFlowAfterTag,
 } from "./tags.js";
 
+type Container = RootNode | TemplateBlockNode;
+type HtmlProjection = Pick<RootNode, "html" | "nodes">;
+
 function hasHtmlMarkup(content: string): boolean {
   return scanHtmlHostContexts(content).tags.length > 0;
 }
 
 function findInlineOnlyStandaloneElements(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
+  node: HtmlProjection,
   segment: string,
 ): Array<{ index: number; marker: string; text: string }> {
   const matches: Array<{ index: number; marker: string; text: string }> = [];
@@ -68,12 +72,10 @@ function findInlineOnlyStandaloneElements(
   return matches;
 }
 
-function splitAtTemplateTags(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
-): string[] {
+function splitAtTemplateTags(node: HtmlProjection): string[] {
   const splitStandaloneTemplateTags = !hasHtmlMarkup(node.html);
   const splitters = markerEntries(node.html, node.nodes)
-    .map(({ id }) => node.nodes[id])
+    .map(({ node }) => node)
     .filter(
       (entry): entry is TemplateTagNode =>
         entry.type === "template-tag" &&
@@ -94,17 +96,14 @@ function splitAtTemplateTags(
   return node.html.split(pattern).filter(Boolean);
 }
 
-function isSingleElementStandaloneTag(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
-  segment: string,
-): boolean {
+function isSingleElementStandaloneTag(node: HtmlProjection, segment: string): boolean {
   const preserved = segment.trimEnd();
   const [match] = findInlineOnlyStandaloneElements(node, preserved);
   return Boolean(match && match.index === 0 && match.text === preserved);
 }
 
 function getWhitespaceSensitiveInlineBody(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
+  node: HtmlProjection,
   segment: string,
 ): { start: number; end: number } | undefined {
   const preserved = segment.trimEnd();
@@ -128,8 +127,7 @@ function getWhitespaceSensitiveInlineBody(
   }
 
   const entries = markerEntries(preserved, node.nodes);
-  const hasUnsafeBlock = entries.some(({ id, index }) => {
-    const child = node.nodes[id];
+  const hasUnsafeBlock = entries.some(({ id, index, node: child }) => {
     const followingIndex = index + id.length;
     return (
       child?.type === "template-block" &&
@@ -166,7 +164,7 @@ function isStandaloneFlowTag(child: DjangoNode | undefined): boolean {
 }
 
 function isStandaloneDocumentFlowTemplateTag(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
+  node: HtmlProjection,
   segment: string | undefined,
 ): boolean {
   if (!segment) {
@@ -181,17 +179,11 @@ function isStandaloneDocumentFlowTemplateTag(
   );
 }
 
-function isTemplateBlockSegment(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
-  segment: string | undefined,
-): boolean {
+function isTemplateBlockSegment(node: HtmlProjection, segment: string | undefined): boolean {
   return Boolean(segment && node.nodes[segment]?.type === "template-block");
 }
 
-function segmentHasRenderableText(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
-  segment: string | undefined,
-): boolean {
+function segmentHasRenderableText(node: HtmlProjection, segment: string | undefined): boolean {
   if (!segment) {
     return false;
   }
@@ -204,8 +196,8 @@ function segmentHasRenderableText(
 }
 
 function splitLeadingStandaloneBlockTag(
-  node: RootNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
-): string[] | undefined {
+  node: HtmlProjection,
+): readonly [string, string] | undefined {
   const match = node.html.match(new RegExp(`^(${BLOCK_MARKER_SOURCE})`));
   if (!match) {
     return undefined;
@@ -236,7 +228,6 @@ function splitLeadingStandaloneBlockTag(
   return [firstId, trimmedRest];
 }
 
-type Container = RootNode | TemplateBlockNode;
 type Balance = ReturnType<typeof scanHtmlHostContexts>["balance"];
 
 /** Structural facts are cached per document, never recomputed during embedding. */
@@ -291,8 +282,7 @@ class HtmlStructure {
   }
 
   children(node: Container): TemplateBlockNode[] {
-    return markerEntries(node.html, node.nodes).flatMap(({ id }) => {
-      const child = node.nodes[id];
+    return markerEntries(node.html, node.nodes).flatMap(({ node: child }) => {
       return child.type === "template-block" && child.hostContext === "document-flow"
         ? [child]
         : [];
@@ -325,8 +315,7 @@ function isUnbalanced(balance: Balance): boolean {
 }
 
 function hasUnbalancedPreservedHtml(node: Container): boolean {
-  return markerEntries(node.html, node.nodes).some(({ id }) => {
-    const child = node.nodes[id];
+  return markerEntries(node.html, node.nodes).some(({ node: child }) => {
     return (
       child.type === "raw-block" &&
       child.preserveOriginalText &&
@@ -350,8 +339,7 @@ function protectConditionalHtmlWhitespace(
   const openElements: string[] = [];
   let rangeStart: { index: number; sourceStart: number } | undefined;
 
-  for (const { id, index } of markerEntries(node.html, node.nodes)) {
-    const child = node.nodes[id];
+  for (const { id, index, node: child } of markerEntries(node.html, node.nodes)) {
     if (child.type !== "template-block" || child.hostContext !== "document-flow") {
       continue;
     }
@@ -401,7 +389,8 @@ function protectConditionalHtmlWhitespace(
       id,
       content: sourceText,
       sourceText,
-      body: sourceText,
+      kind: "source",
+      closed: true,
       preNewLines: 0,
       sourceStart: range.sourceStart,
       sourceEnd: range.sourceEnd,
@@ -463,7 +452,7 @@ function adaptHtmlProjection(node: Container, html: string): string {
     while (context.tags[tagIndex] && context.tags[tagIndex].end <= entry.index) tagIndex += 1;
     const tag = context.tags[tagIndex];
     const previousTag = context.tags[tagIndex - 1];
-    const child = node.nodes[entry.id];
+    const child = entry.node;
     if (
       child.protectedMarkerKind === "attr" &&
       tag &&
@@ -478,7 +467,7 @@ function adaptHtmlProjection(node: Container, html: string): string {
       const previous = entries[index - 1];
       if (
         (previous &&
-          node.nodes[previous.id].protectedMarkerKind === "block" &&
+          previous.node.protectedMarkerKind === "block" &&
           previous.index + previous.id.length === entry.index) ||
         (previousTag?.closing &&
           (BLOCK_FLOW_ELEMENTS.has(previousTag.name) ||
@@ -518,8 +507,18 @@ function adaptHtmlProjection(node: Container, html: string): string {
 interface PreparedSegment {
   readonly segment: string;
   readonly beforeReplacements: readonly { readonly token: string; readonly value: string }[];
-  readonly standaloneMarker?: string;
-  readonly sensitiveBody?: { readonly start: number; readonly end: number };
+  readonly protection:
+    | { readonly kind: "none" }
+    | { readonly kind: "standalone"; readonly marker: string }
+    | {
+        readonly kind: "sensitive-body";
+        readonly range: { readonly start: number; readonly end: number };
+      };
+}
+
+export interface PlannedSegment extends PreparedSegment {
+  readonly original: string;
+  readonly boundary: Readonly<SegmentBoundary>;
 }
 
 function prepareSegmentForHtml(
@@ -601,8 +600,11 @@ function prepareSegmentForHtml(
   return {
     segment: prepared,
     beforeReplacements,
-    standaloneMarker: standalone?.marker,
-    sensitiveBody,
+    protection: sensitiveBody
+      ? { kind: "sensitive-body", range: sensitiveBody }
+      : standalone
+        ? { kind: "standalone", marker: standalone.marker }
+        : { kind: "none" },
   };
 }
 
@@ -617,19 +619,19 @@ function hasLeadingBlankLine(segment: string): boolean {
 }
 
 function planSegmentBoundaries(
-  node: TemplateBlockNode | { html: string; nodes: Readonly<Record<string, DjangoNode>> },
+  node: HtmlProjection,
   segments: readonly string[],
-): SegmentBoundary[] {
-  const boundaries: SegmentBoundary[] = [];
+): Array<Pick<PlannedSegment, "original" | "boundary">> {
+  const planned: Array<Pick<PlannedSegment, "original" | "boundary">> = [];
 
-  let previousContentSegment: string | undefined;
+  let previousContentSegment = "";
   for (const [index, segment] of segments.entries()) {
     const boundary: SegmentBoundary = { before: "none", after: 0 };
-    const lastEntry = markerEntries(previousContentSegment ?? "", node.nodes).at(-1);
+    const lastEntry = markerEntries(previousContentSegment, node.nodes).at(-1);
     const followsBlock =
       lastEntry &&
-      node.nodes[lastEntry.id].type === "template-block" &&
-      !previousContentSegment!.slice(lastEntry.index + lastEntry.id.length).trim();
+      lastEntry.node.type === "template-block" &&
+      !previousContentSegment.slice(lastEntry.index + lastEntry.id.length).trim();
     const previousTrimmedSegment = segments[index - 1]?.trim();
     const previousTrimmedNode = previousTrimmedSegment
       ? node.nodes[previousTrimmedSegment]
@@ -657,7 +659,7 @@ function planSegmentBoundaries(
     const nextSegment = segments[index + 1];
     const nextEntry = markerEntries(nextSegment ?? "", node.nodes)[0];
     const immediatelyPrecedesBlock =
-      nextEntry?.index === 0 && node.nodes[nextEntry.id].type === "template-block";
+      nextEntry?.index === 0 && nextEntry.node.type === "template-block";
     if (
       isStandaloneDocumentFlowTemplateTag(node, segment) &&
       (segmentHasRenderableText(node, nextSegment) ||
@@ -669,10 +671,10 @@ function planSegmentBoundaries(
         boundary.after += 1;
       }
     }
-    boundaries.push(boundary);
+    planned.push({ original: segment, boundary });
   }
 
-  return boundaries;
+  return planned;
 }
 
 export interface PreservedSpan {
@@ -697,15 +699,14 @@ interface MarkerContext {
 export interface ContainerPlan {
   readonly node: RootNode | TemplateBlockNode;
   readonly body:
+    | { readonly kind: "preserved"; readonly span: PreservedSpan }
     | { readonly kind: "expression-lines"; readonly lines: readonly (readonly string[])[] }
-    | { readonly kind: "start-tag" | "html" };
+    | { readonly kind: "start-tag"; readonly block: TemplateBlockNode }
+    | { readonly kind: "leading-standalone"; readonly ids: readonly [string, string] }
+    | { readonly kind: "block-sequence"; readonly ids: readonly string[] }
+    | { readonly kind: "html" };
   readonly markerContexts: ReadonlyMap<string, MarkerContext>;
-  readonly segments: readonly string[];
-  readonly boundaries: readonly Readonly<SegmentBoundary>[];
-  readonly preparedSegments: readonly PreparedSegment[];
-  readonly leadingStandaloneSplit?: readonly string[];
-  readonly blockSequence?: readonly string[];
-  readonly preserved?: PreservedSpan;
+  readonly segments: readonly PlannedSegment[];
   readonly finalNewline: boolean;
 }
 
@@ -721,8 +722,12 @@ function ignoredSourceRanges(source: string, html: HtmlHostContextIndex, ordered
   for (const [index, tag] of html.tags.entries()) {
     if (tag.selfClosing) elementEnds.set(index, tag.end);
     else if (!tag.closing) stack.push(index);
-    else if (stack.length && html.tags[stack.at(-1)!].name === tag.name) {
-      elementEnds.set(stack.pop()!, tag.end);
+    else {
+      const openingIndex = stack.at(-1);
+      if (openingIndex !== undefined && html.tags[openingIndex].name === tag.name) {
+        stack.pop();
+        elementEnds.set(openingIndex, tag.end);
+      }
     }
   }
   let nodeIndex = 0;
@@ -798,9 +803,15 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
             node: root,
             body: { kind: "html" },
             markerContexts: new Map(),
-            segments: [root.html],
-            boundaries: [{ before: "none", after: 0 }],
-            preparedSegments: [{ segment: root.html, beforeReplacements: [] }],
+            segments: [
+              {
+                original: root.html,
+                segment: root.html,
+                boundary: { before: "none", after: 0 },
+                beforeReplacements: [],
+                protection: { kind: "none" },
+              },
+            ],
             finalNewline: true,
           },
         ],
@@ -905,7 +916,7 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
     const markerContexts = new Map<string, MarkerContext>();
     const standaloneExpressions = new Set<string>();
     for (const [index, entry] of entries.entries()) {
-      const child = nodes[entry.id];
+      const child = entry.node;
       // Expression-only containers already preserve their line groups directly.
       // In mixed HTML, keep standalone expressions structural only in safe flow.
       const standaloneExpression =
@@ -927,10 +938,11 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       const betweenNext = next
         ? node.html.slice(entry.index + entry.id.length, next.index)
         : undefined;
-      const previousId =
-        previous?.index + previous?.id.length === whitespaceStart ? previous.id : undefined;
       const gapBefore = node.html.slice(whitespaceStart, entry.index);
-      const previousNode = previousId ? nodes[previousId] : undefined;
+      const previousNode =
+        previous && previous.index + previous.id.length === whitespaceStart
+          ? previous.node
+          : undefined;
       const keyword =
         child.type === "template-block"
           ? child.start.keyword
@@ -951,7 +963,7 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
             (previousNode.protectedMarkerKind !== "block" ||
               child.protectedMarkerKind !== "block") &&
             startsDocumentFlowAfterTag(keyword));
-      const nextNode = next ? nodes[next.id] : undefined;
+      const nextNode = next?.node;
       // Template comments and protected HTML comments become inline text markers.
       // Preserve their line boundaries in document flow, but not inside inline HTML.
       const childIsComment = isInlineComment(child, htmlCommentEnds);
@@ -995,8 +1007,7 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
     const blockSequence =
       ending &&
       /^[ \t\r\n]*$/.test(node.html.slice(ending.index + ending.id.length)) &&
-      entries.every(({ id, index }, entryIndex) => {
-        const child = nodes[id];
+      entries.every(({ index, node: child }, entryIndex) => {
         const previous = entries[entryIndex - 1];
         const gap = node.html.slice(previous ? previous.index + previous.id.length : 0, index);
         return (
@@ -1009,42 +1020,42 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
         : undefined;
     const endingNode =
       ending && /^\s*$/.test(node.html.slice(ending.index + ending.id.length))
-        ? nodes[ending.id]
+        ? ending.node
         : undefined;
     const unclosed =
       (endingNode?.type === "ignore-region" && !endingNode.closed) ||
-      (endingNode?.type === "raw-block" && endingNode.body === undefined);
+      (endingNode?.type === "raw-block" && isUnclosedRawBlock(endingNode));
     const preservedSpan = preserved.get(node.id);
     const expressionLines = getExpressionOnlyLines(node);
-    const body: ContainerPlan["body"] = expressionLines
-      ? { kind: "expression-lines", lines: expressionLines }
-      : {
-          kind:
-            node.type === "template-block" &&
+    const body: ContainerPlan["body"] = preservedSpan
+      ? { kind: "preserved", span: preservedSpan }
+      : expressionLines
+        ? { kind: "expression-lines", lines: expressionLines }
+        : node.type === "template-block" &&
             node.hostContext === "start-tag" &&
             node.containsNewLines
-              ? "start-tag"
-              : "html",
-        };
+          ? { kind: "start-tag", block: node }
+          : leadingStandaloneSplit
+            ? { kind: "leading-standalone", ids: leadingStandaloneSplit }
+            : blockSequence
+              ? { kind: "block-sequence", ids: blockSequence }
+              : { kind: "html" };
     containers.set(node.id, {
       node,
       body,
       markerContexts,
-      segments,
-      boundaries: planSegmentBoundaries(node, segments),
-      preparedSegments: segments.map((segment) =>
-        prepareSegmentForHtml(
+      segments: planSegmentBoundaries(node, segments).map(({ original, boundary }) => ({
+        original,
+        boundary,
+        ...prepareSegmentForHtml(
           node,
-          segment,
+          original,
           allocator,
           markerContexts,
           preserved,
           standaloneExpressions,
         ),
-      ),
-      leadingStandaloneSplit,
-      blockSequence,
-      preserved: preservedSpan,
+      })),
       finalNewline: preservedSpan
         ? preservedSpan.reason === "conditional-html" && !preservedSpan.text.endsWith("\n")
         : !unclosed,
@@ -1064,9 +1075,9 @@ export function analyzeDocument(root: RootNode): DocumentPlan {
       opaqueIndex += 1;
     }
     const layout = containers.get(original.id);
-    if (layout && !layout.preserved && original.sourceEnd <= opaqueEnd) {
+    if (layout && layout.body.kind !== "preserved" && original.sourceEnd <= opaqueEnd) {
       const span = preserve(original, original.sourceText, "source");
-      containers.set(original.id, { ...layout, preserved: span });
+      containers.set(original.id, { ...layout, body: { kind: "preserved", span } });
     }
   }
   Object.freeze(nodes);

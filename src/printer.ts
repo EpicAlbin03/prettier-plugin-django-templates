@@ -1,9 +1,9 @@
 import type { AstPath, Doc, Options, Printer } from "prettier";
 import { doc } from "prettier";
 import { scanHtmlHostContexts, splitHtmlAttributes } from "./html-host-context.js";
-import { HtmlDocCache } from "./html-doc-cache.js";
+import { HtmlDocCache, type TextToDoc } from "./html-doc-cache.js";
 import { containsProtectedNodeMarker, replaceProtectedMarkersInString } from "./html-adapter.js";
-import { getDocumentPlan, prepareDocument, type ContainerPlan } from "./formatting-plan.js";
+import { getDocumentPlan, prepareDocument, type PlannedSegment } from "./formatting-plan.js";
 import { formatExpression, getRawBlockText } from "./template-text.js";
 import {
   markerEntries,
@@ -12,12 +12,22 @@ import {
   INLINE_MARKER_SOURCE,
 } from "./internal-markers.js";
 import { getStartTagFormatting, isBranchTag } from "./tags.js";
-import type { TemplateBlockNode, DjangoNode, TemplateTagNode } from "./ast.js";
+import type { TemplateBlockNode, DjangoNode, TemplateTagNode, RootNode } from "./ast.js";
 
 const { builders, utils } = doc;
 const { mapDoc } = utils;
 
-const htmlDocCaches = new WeakMap<Readonly<Record<string, DjangoNode>>, HtmlDocCache>();
+type PrintNode = Parameters<Printer<DjangoNode>["print"]>[2];
+const htmlDocCaches = new WeakMap<RootNode["nodes"], HtmlDocCache>();
+
+function getHtmlDocCache(nodes: RootNode["nodes"]): HtmlDocCache {
+  let cache = htmlDocCaches.get(nodes);
+  if (!cache) {
+    cache = new HtmlDocCache(nodes);
+    htmlDocCaches.set(nodes, cache);
+  }
+  return cache;
+}
 
 export const preprocess: Printer<DjangoNode>["preprocess"] = (node) => {
   if (node.type === "root") {
@@ -96,19 +106,20 @@ function printTemplateTag(node: TemplateTagNode, htmlOwnsSpacing = false): Doc {
 
   if (
     isBranchTag(node.keyword) &&
-    node.parentBlockRelationship === "content" &&
-    node.parentBlockContext?.host === "document-flow"
+    node.parentBlock?.relationship === "content" &&
+    node.parentBlock.context.host === "document-flow"
   ) {
     return [builders.dedent(builders.hardline), templateTag, builders.hardline];
   }
 
   if (node.preNewLines > 1 && !htmlOwnsSpacing) {
-    const hasParentBlock = node.parentBlockRelationship !== undefined;
+    const hasParentBlock =
+      node.parentBlock !== undefined && node.parentBlock.relationship !== "start";
     const standaloneNeedsSpacing =
       node.role === "standalone" &&
       (node.protectedMarkerKind !== "block" ||
         !hasParentBlock ||
-        !node.parentBlockContext?.hasHtmlMarkup);
+        !node.parentBlock?.context.hasHtmlMarkup);
     if (standaloneNeedsSpacing) {
       return builders.group([builders.trim, builders.hardline, templateTag]);
     }
@@ -117,9 +128,8 @@ function printTemplateTag(node: TemplateTagNode, htmlOwnsSpacing = false): Doc {
   return templateTag;
 }
 
-function joinSegments(layout: ContainerPlan, mapped: Doc[]): Doc {
-  return mapped.flatMap((segment, index) => {
-    const boundary = layout.boundaries[index];
+function joinSegments(mapped: Array<{ doc: Doc; boundary: PlannedSegment["boundary"] }>): Doc {
+  return mapped.flatMap(({ doc: segment, boundary }) => {
     return [
       boundary.before === "trim-line" ? builders.trim : "",
       boundary.before !== "none" ? builders.hardline : "",
@@ -131,7 +141,7 @@ function joinSegments(layout: ContainerPlan, mapped: Doc[]): Doc {
 
 function getStartTagTemplateBlockDoc(
   path: AstPath<DjangoNode>,
-  print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
+  print: PrintNode,
   block: TemplateBlockNode,
 ): Doc {
   const docs: Doc[] = [];
@@ -165,7 +175,7 @@ function getStartTagTemplateBlockDoc(
 
 function buildBlock(
   path: AstPath<DjangoNode>,
-  print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
+  print: PrintNode,
   block: TemplateBlockNode,
   mapped: Doc,
   preserveMappedIndentation = false,
@@ -216,87 +226,95 @@ export const print: Printer<DjangoNode>["print"] = (path) => {
       return getRawBlockText(node);
     case "ignore-region":
       return node.sourceText;
-    default:
+    case "root":
+    case "template-block":
       return node.sourceText;
+    default: {
+      const _exhaustive: never = node;
+      return _exhaustive;
+    }
   }
 };
 
 export const embed: Printer<DjangoNode>["embed"] = () => {
   return async (
-    textToDoc: (text: string, options: Options) => Promise<Doc>,
-    print: (selector?: string | number | Array<string | number> | AstPath<DjangoNode>) => Doc,
+    textToDoc: TextToDoc,
+    print: PrintNode,
     path: AstPath<DjangoNode>,
     options: Options,
   ): Promise<Doc | undefined> => {
     const ast = path.getNode();
     if (!ast || (ast.type !== "root" && ast.type !== "template-block")) return undefined;
     const plan = getDocumentPlan(ast);
-    const layout = plan.containers.get(ast.id)!;
-    const { node, markerContexts, segments, leadingStandaloneSplit } = layout;
-    if (layout.preserved) {
-      return [
-        layout.preserved.text,
-        node.type === "root" && layout.finalNewline ? builders.hardline : "",
-      ];
+    const layout = plan.containers.get(ast.id);
+    if (!layout) return undefined;
+    const { node, markerContexts, segments } = layout;
+    switch (layout.body.kind) {
+      case "preserved":
+        return [
+          layout.body.span.text,
+          node.type === "root" && layout.finalNewline ? builders.hardline : "",
+        ];
+      case "expression-lines": {
+        const body = builders.join(
+          builders.hardline,
+          layout.body.lines.map((line) => [...line]),
+        );
+        return node.type === "template-block"
+          ? buildBlock(path, print, node, body, true)
+          : [body, layout.finalNewline ? builders.hardline : ""];
+      }
+      case "start-tag": {
+        const { block } = layout.body;
+        return buildBlock(path, print, block, getStartTagTemplateBlockDoc(path, print, block));
+      }
+      case "leading-standalone":
+        return [
+          path.call(print, "nodes", layout.body.ids[0]),
+          builders.hardline,
+          path.call(print, "nodes", layout.body.ids[1]),
+          builders.hardline,
+        ];
+      case "block-sequence": {
+        const body = builders.join(
+          builders.hardline,
+          layout.body.ids.map((id) => path.call(print, "nodes", id)),
+        );
+        return node.type === "template-block"
+          ? buildBlock(path, print, node, body)
+          : [body, layout.finalNewline ? builders.hardline : ""];
+      }
+      case "html":
+        break;
+      default: {
+        const _exhaustive: never = layout.body;
+        return _exhaustive;
+      }
     }
-    if (layout.body.kind === "expression-lines") {
-      const body = builders.join(
-        builders.hardline,
-        layout.body.lines.map((line) => [...line]),
-      );
-      return node.type === "template-block"
-        ? buildBlock(path, print, node, body, true)
-        : [body, layout.finalNewline ? builders.hardline : ""];
-    }
-
-    if (node.type === "template-block" && layout.body.kind === "start-tag") {
-      return buildBlock(path, print, node, getStartTagTemplateBlockDoc(path, print, node));
-    }
-
-    if (
-      leadingStandaloneSplit &&
-      node.nodes[leadingStandaloneSplit[1]]?.type === "template-block"
-    ) {
-      return [
-        path.call(print, "nodes", leadingStandaloneSplit[0]),
-        builders.hardline,
-        path.call(print, "nodes", leadingStandaloneSplit[1]),
-        builders.hardline,
-      ];
-    }
-
-    if (layout.blockSequence) {
-      const body = builders.join(
-        builders.hardline,
-        layout.blockSequence.map((id) => path.call(print, "nodes", id)),
-      );
-      return node.type === "template-block"
-        ? buildBlock(path, print, node, body)
-        : [body, layout.finalNewline ? builders.hardline : ""];
-    }
+    const htmlDocs = getHtmlDocCache(ast.nodes);
 
     const mapped = await Promise.all(
-      segments.map(async (segment, segmentIndex) => {
-        const preparedSegment = layout.preparedSegments[segmentIndex];
+      segments.map(async (preparedSegment) => {
+        const { original: segment, boundary } = preparedSegment;
         const doc = node.nodes[segment]
           ? segment
-          : await htmlDocCaches
-              .get(ast.nodes)!
-              .format(
-                preparedSegment.segment,
-                textToDoc,
-                preparedSegment.sensitiveBody ? "strict" : options.htmlWhitespaceSensitivity,
-              );
+          : await htmlDocs.format(
+              preparedSegment.segment,
+              textToDoc,
+              preparedSegment.protection.kind === "sensitive-body"
+                ? "strict"
+                : options.htmlWhitespaceSensitivity,
+            );
 
         if (
           node.type === "root" &&
           Object.keys(node.nodes).length === 0 &&
           preparedSegment.beforeReplacements.length === 0
         ) {
-          return doc;
+          return { doc, boundary };
         }
 
-        return mapDoc(doc, (currentDoc) => {
+        const mappedDoc = mapDoc(doc, (currentDoc) => {
           // A Prettier Doc is a documented union with strings as its only text representation.
           // oxlint-disable-next-line anti-slop/no-runtime-typeof
           if (typeof currentDoc !== "string") {
@@ -312,13 +330,17 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
             return currentDoc;
           }
 
-          return replaceProtectedMarkersInString(currentDoc, node.nodes, (id, context) => {
-            const currentNode = node.nodes[id];
+          return replaceProtectedMarkersInString(currentDoc, node.nodes, (currentNode, context) => {
+            const { id } = currentNode;
             const preserved = plan.preserved.get(id);
             const markerContext = markerContexts.get(id);
             if (preserved && !markerContext?.leadingLines) return { doc: preserved.text };
             // This construct is the entire element body, not a document-flow boundary.
-            if (id === preparedSegment.standaloneMarker && currentNode.type === "template-tag") {
+            if (
+              preparedSegment.protection.kind === "standalone" &&
+              id === preparedSegment.protection.marker &&
+              currentNode.type === "template-tag"
+            ) {
               return { doc: printTemplateTag(currentNode) };
             }
 
@@ -383,10 +405,11 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
             };
           });
         });
+        return { doc: mappedDoc, boundary };
       }),
     );
 
-    const joined = joinSegments(layout, mapped);
+    const joined = joinSegments(mapped);
 
     if (node.type === "template-block") {
       return buildBlock(path, print, node, joined);
@@ -396,7 +419,7 @@ export const embed: Printer<DjangoNode>["embed"] = () => {
   };
 };
 
-export function getVisitorKeys(ast: DjangoNode | Readonly<Record<string, DjangoNode>>): string[] {
+export function getVisitorKeys(ast: DjangoNode | RootNode["nodes"]): string[] {
   if ("type" in ast) {
     return ast.type === "root" ? ["nodes"] : [];
   }

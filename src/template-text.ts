@@ -17,7 +17,11 @@ export function getExpressionOnlyLines(node: RootNode | TemplateBlockNode): stri
   while (lines[0] !== undefined && /^\s*$/.test(lines[0])) {
     lines.shift();
   }
-  while (lines.at(-1) !== undefined && /^\s*$/.test(lines.at(-1)!)) {
+  for (
+    let lastLine = lines.at(-1);
+    lastLine !== undefined && /^\s*$/.test(lastLine);
+    lastLine = lines.at(-1)
+  ) {
     lines.pop();
   }
 
@@ -65,13 +69,35 @@ export function getExpressionOnlyLines(node: RootNode | TemplateBlockNode): stri
   return lineDocs;
 }
 
-export function getRawBlockText(node: RawBlockNode): string {
-  const args = node.args?.trim();
-  const endArgs = node.endArgs?.trim();
-
-  if (!node.keyword || node.body === undefined) {
-    return node.sourceText;
+export function isUnclosedRawBlock(node: RawBlockNode): boolean {
+  switch (node.kind) {
+    case "closed-template":
+      return false;
+    case "unclosed-template":
+      return true;
+    case "source":
+      return !node.closed;
+    default: {
+      const _exhaustive: never = node;
+      return _exhaustive;
+    }
   }
+}
+
+export function getRawBlockText(node: RawBlockNode): string {
+  switch (node.kind) {
+    case "source":
+    case "unclosed-template":
+      return node.sourceText;
+    case "closed-template":
+      break;
+    default: {
+      const _exhaustive: never = node;
+      return _exhaustive;
+    }
+  }
+  const args = node.args.trim();
+  const endArgs = node.endArgs.trim();
 
   if (node.keyword === "verbatim" && args) {
     // Normalizing significant inner whitespace could make an earlier raw terminator match next pass.

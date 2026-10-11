@@ -1,19 +1,16 @@
 import type { Doc } from "prettier";
-import type { DjangoNode } from "./ast.js";
+import type { DjangoNode, RootNode } from "./ast.js";
 import { markerEntries, PROTECTED_MARKER_SOURCE } from "./internal-markers.js";
 
-export function containsProtectedNodeMarker(
-  value: string,
-  nodes: Readonly<Record<string, DjangoNode>>,
-): boolean {
+export function containsProtectedNodeMarker(value: string, nodes: RootNode["nodes"]): boolean {
   return markerEntries(value, nodes).length > 0;
 }
 
 export function replaceProtectedMarkersInString(
   currentDoc: string,
-  nodes: Readonly<Record<string, DjangoNode>>,
+  nodes: RootNode["nodes"],
   render: (
-    id: string,
+    node: DjangoNode,
     context: {
       linePrefix: string;
       lineSuffix: string;
@@ -26,7 +23,7 @@ export function replaceProtectedMarkersInString(
   let cursor = 0;
   let trimFollowingWhitespace = false;
 
-  for (const { id: matchedId, index: matchedIndex } of markerEntries(currentDoc, nodes)) {
+  for (const { id: matchedId, index: matchedIndex, node } of markerEntries(currentDoc, nodes)) {
     const lineStart = currentDoc.lastIndexOf("\n", matchedIndex - 1) + 1;
     const nextNewline = currentDoc.indexOf("\n", matchedIndex + matchedId.length);
     const lineEnd = nextNewline === -1 ? currentDoc.length : nextNewline;
@@ -36,7 +33,7 @@ export function replaceProtectedMarkersInString(
     const hasProtectedMarkerOnNextLine = new RegExp(`^\\n${PROTECTED_MARKER_SOURCE}`).test(
       currentDoc.slice(matchedIndex + matchedId.length),
     );
-    const rendered = render(matchedId, {
+    const rendered = render(node, {
       linePrefix,
       lineSuffix,
       hasNewlineBefore,

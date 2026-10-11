@@ -21,10 +21,8 @@ function plannedSnapshot(root: RootNode): string {
       id,
       html: layout.node.html,
       body: layout.body,
-      segments: layout.preparedSegments,
-      boundaries: layout.boundaries,
+      segments: layout.segments,
       markers: [...layout.markerContexts],
-      preserved: layout.preserved,
     })),
     preserved: [...plan.preserved],
   });
@@ -117,12 +115,15 @@ describe("immutable source and document analysis", () => {
       ({ node }) => node.type === "template-block",
     );
     expect(blocks).toHaveLength(2);
-    expect(blocks.every(({ preserved }) => preserved !== undefined)).toBe(true);
+    expect(blocks.every(({ body }) => body.kind === "preserved")).toBe(true);
     const outer = blocks.find(({ node }) => node.sourceText.startsWith("{%if x%}"))!;
-    expect(outer.preserved?.reason).toBe("attribute-value");
-    expect(outer.preserved?.text).toBe(
-      "{% if x %}{% if y %}a\n  {{ value }}{% endif %}{% endif %}",
-    );
+    expect(outer.body).toMatchObject({
+      kind: "preserved",
+      span: {
+        reason: "attribute-value",
+        text: "{% if x %}{% if y %}a\n  {{ value }}{% endif %}{% endif %}",
+      },
+    });
   });
 
   test("conditional preservation is an explicit plan-owned span, not a synthetic AST child", () => {
