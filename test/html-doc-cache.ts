@@ -142,10 +142,11 @@ test("block sequence planning leaves same-line and blank-line gaps on the HTML p
   const block = "{% panel %}<p>{{ value }}</p>{% endpanel %}";
   for (const gap of ["", " ", "\n\n", "\ntext\n"]) {
     const plan = analyzeDocument(parse(block + gap + block));
-    expect(plan.containers.get("root")?.blockSequence).toBeUndefined();
+    expect(plan.containers.get("root")?.body.kind).not.toBe("block-sequence");
   }
   const plan = analyzeDocument(parse(block + "\r\n  " + block));
-  expect(plan.containers.get("root")?.blockSequence).toHaveLength(2);
+  const body = plan.containers.get("root")?.body;
+  expect(body?.kind === "block-sequence" ? body.ids : undefined).toHaveLength(2);
 });
 
 test("concurrent formatting calls do not reuse another document's Docs or options", async () => {

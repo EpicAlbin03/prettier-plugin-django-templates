@@ -1,4 +1,5 @@
 import type { HtmlHostContext } from "./html-host-context.js";
+import type { TagRole } from "./tags.js";
 
 export type ProtectedMarkerKind = "inline" | "block" | "attr";
 
@@ -11,6 +12,12 @@ export type DjangoNode =
   | RawBlockNode
   | IgnoreRegionNode;
 
+export interface ParentBlock {
+  readonly id: TemplateBlockNode["id"];
+  readonly relationship: "start" | "content" | "end";
+  readonly context: { readonly host: HtmlHostContext; readonly hasHtmlMarkup: boolean };
+}
+
 export interface BaseNode {
   readonly type: string;
   readonly id: string;
@@ -22,9 +29,7 @@ export interface BaseNode {
   readonly sourceStart: number;
   readonly sourceEnd: number;
   readonly protectedMarkerKind: ProtectedMarkerKind;
-  readonly parentBlockId?: string;
-  readonly parentBlockRelationship?: "content" | "end";
-  readonly parentBlockContext?: { readonly host: HtmlHostContext; readonly hasHtmlMarkup: boolean };
+  readonly parentBlock?: ParentBlock;
   readonly hostContext: HtmlHostContext;
 }
 
@@ -48,7 +53,7 @@ export interface TemplateTagNode extends LeafNode {
   readonly type: "template-tag";
   readonly content: string;
   readonly keyword: string;
-  readonly role: "start" | "branch" | "end" | "standalone";
+  readonly role: TagRole;
 }
 
 export interface TemplateBlockNode extends BaseNode {
@@ -67,14 +72,36 @@ export interface CommentNode extends LeafNode {
   readonly content: string;
 }
 
-export interface RawBlockNode extends LeafNode {
+interface RawBlockBase extends LeafNode {
   readonly type: "raw-block";
   readonly content: string;
-  readonly keyword?: string;
-  readonly args?: string;
-  readonly body?: string;
-  readonly endArgs?: string;
 }
+
+export type RawBlockDetails =
+  | {
+      readonly kind: "closed-template";
+      readonly keyword: string;
+      readonly args: string;
+      readonly body: string;
+      readonly endArgs: string;
+    }
+  | {
+      readonly kind: "unclosed-template";
+      readonly keyword: string;
+      readonly args: string;
+      readonly body?: never;
+      readonly endArgs?: never;
+    }
+  | {
+      readonly kind: "source";
+      readonly closed: boolean;
+      readonly keyword?: never;
+      readonly args?: never;
+      readonly body?: never;
+      readonly endArgs?: never;
+    };
+
+export type RawBlockNode = RawBlockBase & RawBlockDetails;
 
 export interface IgnoreRegionNode extends LeafNode {
   readonly type: "ignore-region";

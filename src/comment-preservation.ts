@@ -4,6 +4,7 @@ import type {
   DraftBlock as TemplateBlockNode,
 } from "./ast-builders.js";
 import { ANY_MARKER_SOURCE, InternalMarkerAllocator } from "./internal-markers.js";
+import { isUnclosedRawBlock } from "./template-text.js";
 
 interface SourceRange {
   start: number;
@@ -60,8 +61,8 @@ function expandRange(
       const node = byStart[index];
       if (node.sourceStart >= range.end) break;
       range.end = Math.max(range.end, node.sourceEnd);
-      if (node.type === "template-tag" && node.parentBlockId) {
-        const parent = nodes[node.parentBlockId];
+      if (node.type === "template-tag" && node.parentBlock) {
+        const parent = nodes[node.parentBlock.id];
         if (
           parent.type === "template-block" &&
           (node.role === "branch" || node.id === parent.start.id || node.id === parent.end.id)
@@ -76,14 +77,14 @@ function expandRange(
 
 function enclosingContainer(root: RootNode, range: SourceRange, byStart: DjangoNode[]): Container {
   const first = byStart[firstAfter(byStart, range.start - 1, (node) => node.sourceStart)];
-  let parentId = first?.parentBlockId;
+  let parentId = first?.parentBlock?.id;
   while (parentId) {
     const parent = root.nodes[parentId];
     if (parent.type !== "template-block") break;
     if (parent.start.sourceEnd <= range.start && parent.end.sourceStart >= range.end) {
       return parent;
     }
-    parentId = parent.parentBlockId;
+    parentId = parent.parentBlock?.id;
   }
   return root;
 }
@@ -143,7 +144,7 @@ export function protectHtmlComments(
     byStart.some(
       (node) =>
         node.sourceEnd === source.length &&
-        ((node.type === "raw-block" && node.body === undefined) ||
+        ((node.type === "raw-block" && isUnclosedRawBlock(node)) ||
           (node.type === "ignore-region" && !node.closed)),
     );
   const replacements = new Map<Container, DjangoNode[]>();
@@ -171,7 +172,8 @@ export function protectHtmlComments(
       id,
       content: sourceText,
       sourceText,
-      body: range.end === source.length && hasUnclosedEnding ? undefined : sourceText,
+      kind: "source",
+      closed: !(range.end === source.length && hasUnclosedEnding),
       preserveOriginalText: true,
       preNewLines: 0,
       sourceStart: range.start,

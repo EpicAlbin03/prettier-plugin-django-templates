@@ -1,5 +1,9 @@
 import { protectHtmlComments, type HtmlCommentRange } from "./comment-preservation.js";
-import { isInlineHtmlElement, scanHtmlHostContexts } from "./html-host-context.js";
+import {
+  isInlineHtmlElement,
+  scanHtmlHostContexts,
+  type HtmlHostContext,
+} from "./html-host-context.js";
 import { InternalMarkerAllocator } from "./internal-markers.js";
 import {
   findRawBodyEnd,
@@ -20,6 +24,7 @@ import type {
   IgnoreRegionNode,
   ProtectedMarkerKind,
   RawBlockNode,
+  RawBlockDetails,
 } from "./ast.js";
 
 import type { RootNode } from "./ast.js";
@@ -31,8 +36,6 @@ import {
   type DraftNode as DjangoNode,
 } from "./ast-builders.js";
 
-const NOT_FOUND = -1;
-
 type TokenType = "Text" | "Expression" | "Comment" | "Tag" | "RawBlock" | "IgnoreRegion";
 
 interface TokenBase {
@@ -41,8 +44,7 @@ interface TokenBase {
   content: string;
   start: number;
   end: number;
-  inAttribute: boolean;
-  inTag: boolean;
+  hostContext: HtmlHostContext;
   inPreformatted: boolean;
   inInlineFlow: boolean;
 }
@@ -68,15 +70,12 @@ interface TagToken extends TokenBase {
   type: "Tag";
   name: string;
   args: string;
-  role: "start" | "branch" | "end" | "standalone";
+  role: TemplateTagNode["role"];
 }
 
 interface RawBlockToken extends TokenBase {
   type: "RawBlock";
-  name: string;
-  args: string;
-  body?: string;
-  endArgs?: string;
+  details: Exclude<RawBlockDetails, { kind: "source" }>;
 }
 
 type Token =
@@ -104,7 +103,7 @@ function createTextToken(
   text: string,
   start: number,
   end: number,
-  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted" | "inInlineFlow">,
+  state: Pick<TokenBase, "hostContext" | "inPreformatted" | "inInlineFlow">,
 ): TextToken {
   return {
     type: "Text",
@@ -170,10 +169,10 @@ function createTagToken(
   raw: string,
   start: number,
   end: number,
-  state: Pick<TokenBase, "inAttribute" | "inTag" | "inPreformatted" | "inInlineFlow">,
+  state: Pick<TokenBase, "hostContext" | "inPreformatted" | "inInlineFlow">,
 ): TagToken {
   const content = normalizeTemplateTagContent(raw.slice(2, -2));
-  const name = content.split(/\s+/, 1)[0];
+  const [name = ""] = content.split(/\s+/, 1);
   const args = content.slice(name.length).trimStart();
 
   return {
@@ -206,8 +205,7 @@ function tokenize(text: string) {
     return {
       tokens: [
         createTextToken(text, 0, text.length, {
-          inAttribute: false,
-          inTag: false,
+          hostContext: "document-flow",
           inPreformatted: false,
           inInlineFlow: false,
         }),
@@ -229,8 +227,7 @@ function tokenize(text: string) {
   while (cursor < text.length) {
     const hostContext = hostContexts.at(cursor);
     const tokenState = {
-      inAttribute: hostContext === "attribute-value",
-      inTag: hostContext !== "document-flow",
+      hostContext,
       inPreformatted: hostContext === "document-flow" && hostContexts.isPreformattedAt(cursor),
       inInlineFlow:
         hostContext === "document-flow" &&
@@ -298,8 +295,8 @@ function tokenize(text: string) {
       continue;
     }
 
-    if (text.startsWith("{{", cursor)) {
-      const end = cursor + templateMatch![0].length;
+    if (templateMatch && text.startsWith("{{", cursor)) {
+      const end = cursor + templateMatch[0].length;
       const raw = text.slice(cursor, end);
       tokens.push({
         type: "Expression",
@@ -313,8 +310,8 @@ function tokenize(text: string) {
       continue;
     }
 
-    if (text.startsWith("{#", cursor)) {
-      const end = cursor + templateMatch![0].length;
+    if (templateMatch && text.startsWith("{#", cursor)) {
+      const end = cursor + templateMatch[0].length;
       const raw = text.slice(cursor, end);
       tokens.push({
         type: "Comment",
@@ -328,8 +325,8 @@ function tokenize(text: string) {
       continue;
     }
 
-    if (text.startsWith("{%", cursor)) {
-      const end = cursor + templateMatch![0].length;
+    if (templateMatch && text.startsWith("{%", cursor)) {
+      const end = cursor + templateMatch[0].length;
       const raw = text.slice(cursor, end);
       const tag = createTagToken(raw, cursor, end, tokenState);
 
@@ -342,10 +339,13 @@ function tokenize(text: string) {
             type: "RawBlock",
             raw: blockRaw,
             content: tag.content,
-            name: tag.name,
-            args: tag.args,
-            body: text.slice(end, blockEndInfo.closingStart),
-            endArgs: blockEndInfo.endArgs,
+            details: {
+              kind: "closed-template",
+              keyword: tag.name,
+              args: tag.args,
+              body: text.slice(end, blockEndInfo.closingStart),
+              endArgs: blockEndInfo.endArgs,
+            },
             start: cursor,
             end: blockEndInfo.end,
             ...tokenState,
@@ -360,8 +360,13 @@ function tokenize(text: string) {
             type: "RawBlock",
             raw: text.slice(cursor),
             content: tag.content,
-            name: tag.name,
-            args: tag.args,
+            details: {
+              kind: "unclosed-template",
+              keyword: tag.name,
+              args: tag.args,
+              body: undefined,
+              endArgs: undefined,
+            },
             start: cursor,
             end: text.length,
             ...tokenState,
@@ -406,7 +411,7 @@ function actsAsEndTag(token: TagToken, expectedEndCounts: Map<string, number>): 
 }
 
 function shouldInlineStandalone(tag: TagToken): boolean {
-  return tag.inAttribute || tag.inTag || getStandaloneFlow(tag.name, tag.args) === "inline";
+  return tag.hostContext !== "document-flow" || getStandaloneFlow(tag.name, tag.args) === "inline";
 }
 
 function getStandaloneTagsWithLaterEnds(tokens: Token[]): Set<number> {
@@ -457,7 +462,7 @@ function protectedMarkerKindForToken(token: Token, forceBlock = false): Protecte
   ) {
     return "inline";
   }
-  if (token.inTag && !token.inAttribute) {
+  if (token.hostContext === "start-tag") {
     return "attr";
   }
 
@@ -470,7 +475,7 @@ function protectedMarkerKindForToken(token: Token, forceBlock = false): Protecte
   }
 
   if (token.type === "IgnoreRegion" || token.type === "RawBlock") {
-    return token.inTag || token.inAttribute ? "inline" : "block";
+    return token.hostContext !== "document-flow" ? "inline" : "block";
   }
 
   return "inline";
@@ -546,120 +551,61 @@ export function parse(text: string): RootNode {
         ? rawPreNewLines - 1
         : rawPreNewLines;
 
-    if (token.type === "Expression") {
-      const id = createId(token);
-      const node: ExpressionNode = {
-        type: "expression",
-        id,
-        content: token.content,
-        sourceText: token.raw,
-        preserveOriginalText: token.inPreformatted,
-        preNewLines,
-        sourceStart: token.start,
-        sourceEnd: token.end,
-        protectedMarkerKind: protectedMarkerKindForToken(token),
-        hostContext: token.inAttribute
-          ? "attribute-value"
-          : token.inTag
-            ? "start-tag"
-            : "document-flow",
-      };
-      nodes[id] = node;
-      append(id, id);
-      continue;
-    }
-
-    if (token.type === "Comment") {
-      const id = createId(token);
-      const node: CommentNode = {
-        type: "comment",
-        id,
-        content: token.content,
-        sourceText: token.raw,
-        preserveOriginalText: token.inPreformatted,
-        preNewLines,
-        sourceStart: token.start,
-        sourceEnd: token.end,
-        protectedMarkerKind: protectedMarkerKindForToken(token),
-        hostContext: token.inAttribute
-          ? "attribute-value"
-          : token.inTag
-            ? "start-tag"
-            : "document-flow",
-      };
-      nodes[id] = node;
-      append(id, id);
-      continue;
-    }
-
-    if (token.type === "IgnoreRegion") {
-      const id = createId(token, !token.inTag && !token.inAttribute);
-      const node: IgnoreRegionNode = {
-        type: "ignore-region",
-        id,
-        content: token.raw,
-        sourceText: token.raw,
-        preserveOriginalText: token.inPreformatted,
-        preNewLines,
-        sourceStart: token.start,
-        sourceEnd: token.end,
-        protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
-        hostContext: token.inAttribute
-          ? "attribute-value"
-          : token.inTag
-            ? "start-tag"
-            : "document-flow",
-        closed: token.closed,
-      };
-      nodes[id] = node;
-      append(id, id);
-      continue;
-    }
-
-    if (token.type === "RawBlock") {
-      const id = createId(token, !token.inTag && !token.inAttribute);
-      const node: RawBlockNode = {
-        type: "raw-block",
-        id,
-        content: token.raw,
-        sourceText: token.raw,
-        preserveOriginalText: token.inPreformatted,
-        preNewLines,
-        sourceStart: token.start,
-        sourceEnd: token.end,
-        protectedMarkerKind: protectedMarkerKindForToken(token, !token.inTag && !token.inAttribute),
-        hostContext: token.inAttribute
-          ? "attribute-value"
-          : token.inTag
-            ? "start-tag"
-            : "document-flow",
-        keyword: token.name,
-        args: token.args,
-        body: token.body,
-        endArgs: token.endArgs,
-      };
-      nodes[id] = node;
-      append(id, id);
-      continue;
-    }
-
-    const node: TemplateTagNode = {
-      type: "template-tag",
+    const base = {
       id: createId(token),
-      content: token.content,
       sourceText: token.raw,
       preserveOriginalText: token.inPreformatted,
       preNewLines,
       sourceStart: token.start,
       sourceEnd: token.end,
+      protectedMarkerKind: protectedMarkerKindForToken(token),
+      hostContext: token.hostContext,
+    };
+
+    if (token.type === "Expression") {
+      const node: ExpressionNode = { ...base, type: "expression", content: token.content };
+      nodes[node.id] = node;
+      append(node.id, node.id);
+      continue;
+    }
+
+    if (token.type === "Comment") {
+      const node: CommentNode = { ...base, type: "comment", content: token.content };
+      nodes[node.id] = node;
+      append(node.id, node.id);
+      continue;
+    }
+
+    if (token.type === "IgnoreRegion") {
+      const node: IgnoreRegionNode = {
+        ...base,
+        type: "ignore-region",
+        content: token.raw,
+        closed: token.closed,
+      };
+      nodes[node.id] = node;
+      append(node.id, node.id);
+      continue;
+    }
+
+    if (token.type === "RawBlock") {
+      const node: RawBlockNode = {
+        ...base,
+        ...token.details,
+        type: "raw-block",
+        content: token.raw,
+      };
+      nodes[node.id] = node;
+      append(node.id, node.id);
+      continue;
+    }
+
+    const node: TemplateTagNode = {
+      ...base,
+      type: "template-tag",
+      content: token.content,
       keyword: token.name,
       role: token.role,
-      protectedMarkerKind: protectedMarkerKindForToken(token),
-      hostContext: token.inAttribute
-        ? "attribute-value"
-        : token.inTag
-          ? "start-tag"
-          : "document-flow",
     };
     if (token.role === "branch") {
       if (!hasMatchingBranchParent(token, stack)) {
@@ -676,25 +622,21 @@ export function parse(text: string): RootNode {
       endNode.role = "end";
       nodes[endNode.id] = endNode;
 
-      let matchIndex = NOT_FOUND;
-      for (let index = stack.length - 1; index >= 0; index -= 1) {
-        if (matchesEnd(stack[index].start, token.name)) {
-          matchIndex = index;
-          break;
-        }
-      }
-
-      if (matchIndex === NOT_FOUND) {
+      const frame = stack.at(-1);
+      if (
+        !frame ||
+        (!matchesEnd(frame.start, token.name) &&
+          !stack.some((open) => matchesEnd(open.start, token.name)))
+      ) {
         throw new Error(`No start tag found for template end tag "{% ${endNode.content} %}".`);
       }
-      if (matchIndex !== stack.length - 1) {
-        const innerOpen = stack.at(-1)!.start;
+      if (!matchesEnd(frame.start, token.name)) {
         throw new Error(
-          `Unexpected template end tag "{% ${endNode.content} %}" while "{% ${innerOpen.content} %}" is still open.`,
+          `Unexpected template end tag "{% ${endNode.content} %}" while "{% ${frame.start.content} %}" is still open.`,
         );
       }
 
-      const frame = stack.pop()!;
+      stack.pop();
       updateExpectedEnds(frame.start.keyword, -1);
       const content = frame.parts.join("");
       const blockText = text.slice(frame.start.sourceStart, token.end);
@@ -724,19 +666,14 @@ export function parse(text: string): RootNode {
         hostContext: frame.start.hostContext,
       };
       const parentBlockHasHtmlMarkup = scanHtmlHostContexts(content).tags.length > 0;
-      frame.start.parentBlockId = blockId;
-      endNode.parentBlockId = blockId;
-      endNode.parentBlockRelationship = "end";
-      const parentBlockContext = {
+      const context = {
         host: blockNode.hostContext,
         hasHtmlMarkup: parentBlockHasHtmlMarkup,
       };
-      endNode.parentBlockContext = parentBlockContext;
+      frame.start.parentBlock = { id: blockId, relationship: "start", context };
+      endNode.parentBlock = { id: blockId, relationship: "end", context };
       for (const childId of frame.childIds) {
-        const child = nodes[childId];
-        child.parentBlockId = blockId;
-        child.parentBlockRelationship = "content";
-        child.parentBlockContext = parentBlockContext;
+        nodes[childId].parentBlock = { id: blockId, relationship: "content", context };
       }
       nodes[blockId] = blockNode;
       append(blockId, blockId);

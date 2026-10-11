@@ -1,8 +1,9 @@
-import { doc, type Doc, type Options } from "prettier";
-import type { DjangoNode } from "./ast.js";
+import { doc, type Doc, type Options, type Printer } from "prettier";
+import type { DjangoNode, RootNode } from "./ast.js";
 import { INLINE_MARKER_SOURCE, markerEntries } from "./internal-markers.js";
 
-type TextToDoc = (text: string, options: Options) => Promise<Doc>;
+type Embed = Exclude<ReturnType<NonNullable<Printer<DjangoNode>["embed"]>>, Doc | null>;
+export type TextToDoc = Parameters<Embed>[0];
 
 interface CachedHtmlDoc {
   readonly ids: readonly string[];
@@ -16,10 +17,10 @@ interface CachedHtmlDoc {
  * sent to Prettier; the first fragment is parsed exactly as supplied.
  */
 export class HtmlDocCache {
-  readonly #nodes: Readonly<Record<string, DjangoNode>>;
+  readonly #nodes: RootNode["nodes"];
   readonly #entries = new Map<string, CachedHtmlDoc>();
 
-  constructor(nodes: Readonly<Record<string, DjangoNode>>) {
+  constructor(nodes: RootNode["nodes"]) {
     this.#nodes = nodes;
   }
 
@@ -40,10 +41,7 @@ export class HtmlDocCache {
     const entries = markerEntries(text, this.#nodes);
     if (
       entries.length === 0 ||
-      entries.some(({ id }) => {
-        const node = this.#nodes[id];
-        return node.type !== "expression" || node.hostContext !== "document-flow";
-      })
+      entries.some(({ node }) => node.type !== "expression" || node.hostContext !== "document-flow")
     ) {
       return textToDoc(text, options);
     }
@@ -93,11 +91,13 @@ export class HtmlDocCache {
       if (!Array.isArray(part)) {
         if (part.type === "group" && part.id) return { ...part, id: freshGroupId(part.id) };
         if (part.type === "if-break" || part.type === "indent-if-break") {
-          // SAFETY: Prettier's builders accept a symbol groupId, but its published
-          // Doc declarations omit that field on IfBreak and IndentIfBreak.
-          const conditional = part as typeof part & { groupId?: symbol };
-          if (conditional.groupId) {
-            return { ...conditional, groupId: freshGroupId(conditional.groupId) };
+          // Prettier omits groupId from these Doc declarations. Validate the
+          // undeclared field at this library boundary before using it.
+          if ("groupId" in part) {
+            // oxlint-disable-next-line anti-slop/no-runtime-typeof
+            if (typeof part.groupId === "symbol") {
+              return { ...part, groupId: freshGroupId(part.groupId) };
+            }
           }
         }
       }

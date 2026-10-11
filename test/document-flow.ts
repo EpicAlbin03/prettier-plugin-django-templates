@@ -39,6 +39,21 @@ test("adjacent inline elements containing standalone tags stay adjacent", async 
   expect(await formatTemplate(output)).toBe(output);
 });
 
+test.each(["\n", "\n\n"])(
+  "preserves %j between a standalone tag and a Django comment",
+  async (gap) => {
+    const source = `{% extends "base.html" %}${gap}{# note #}\n`;
+    const output = await formatTemplate(source);
+    expect(output).toBe(source);
+    expect(await formatTemplate(output)).toBe(output);
+  },
+);
+
+test("a Django comment after an inline standalone tag adds no separator", async () => {
+  const source = '<span>a{% include "part.html" %}{# note #}b</span>';
+  await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);
+});
+
 test("a non-rendering comment block between inline siblings adds no separator", async () => {
   const source = "<span>a</span>{% comment %}hidden{% endcomment %}<span>b</span>";
   await expect(formatTemplate(source)).resolves.toBe(`${source}\n`);

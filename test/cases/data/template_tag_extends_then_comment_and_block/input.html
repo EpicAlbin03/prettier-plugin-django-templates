@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+
+{# Django skips this template when resolving its parent, loading gui_components' base.html. #}
+{% block navbar %}
+  {{ block.super }}
+  <div>Hello</div>
+{% endblock navbar %}

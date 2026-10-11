@@ -1,4 +1,4 @@
-import type { DjangoNode } from "./ast.js";
+import type { DjangoNode, RootNode } from "./ast.js";
 export type InternalMarkerKind = "inline" | "block" | "attr" | "temporary-run";
 
 export const INLINE_MARKER_SOURCE = String.raw`DJ\d+X`;
@@ -25,8 +25,12 @@ function markerFor(id: number, kind: InternalMarkerKind): string {
       return `dj${id}=""`;
     case "temporary-run":
       return `${TEMPORARY_RUN_MARKER_PREFIX}${id}_X`;
-    default:
+    case "inline":
       return `DJ${id}X`;
+    default: {
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
   }
 }
 
@@ -82,12 +86,14 @@ export class InternalMarkerAllocator {
 
 export function markerEntries(
   value: string,
-  nodes: Readonly<Record<string, DjangoNode>>,
-): Array<{ id: string; index: number }> {
-  const entries: Array<{ id: string; index: number }> = [];
+  nodes: RootNode["nodes"],
+): Array<{ id: DjangoNode["id"]; index: number; node: DjangoNode }> {
+  const entries: Array<{ id: DjangoNode["id"]; index: number; node: DjangoNode }> = [];
   for (const match of value.matchAll(new RegExp(ANY_MARKER_SOURCE, "g"))) {
-    if (nodes[match[0]]) {
-      entries.push({ id: match[0], index: match.index });
+    const id = match[0];
+    const node = nodes[id];
+    if (node) {
+      entries.push({ id, index: match.index, node });
     }
   }
   return entries;

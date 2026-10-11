@@ -20,7 +20,10 @@ export type DraftNode =
 export function finishDocument(root: DraftRoot): RootNode {
   for (const node of Object.values(root.nodes)) {
     if (node.type === "template-block") Object.freeze(node.childIds);
-    if (node.parentBlockContext) Object.freeze(node.parentBlockContext);
+    if (node.parentBlock) {
+      Object.freeze(node.parentBlock.context);
+      Object.freeze(node.parentBlock);
+    }
     Object.freeze(node);
   }
   Object.freeze(root.nodes);
