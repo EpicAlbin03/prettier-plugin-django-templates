@@ -1,5 +1,11 @@
 # prettier-plugin-django-templates changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- [#19](https://github.com/EpicAlbin03/prettier-plugin-django-templates/pull/19) [`0fba317`](https://github.com/EpicAlbin03/prettier-plugin-django-templates/commit/0fba31729362475fb2cc47048fa6be0223b58ede) Thanks [@EpicAlbin03](https://github.com/EpicAlbin03)! - fix: preserve line breaks before comments after standalone template tags
+
 ## 0.3.0
 
 ### Minor Changes
